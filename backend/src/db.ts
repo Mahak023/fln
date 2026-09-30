@@ -1699,6 +1699,96 @@ export class DBStore {
     return counts;
   }
 
+  /**
+   * Per-school evaluation aggregates, for the executive school table.
+   *
+   * One pipeline over `students` (indexed on `schoolId`) that looks each
+   * child's reports up through the `evaluationReports.studentId` index, so
+   * the whole table costs a single server-side query rather than one query
+   * per school.
+   *
+   * A report counts as passed when the child got at least half the questions
+   * right. `score` is a correct-answer count on every production writer
+   * (routes/evaluation.ts, routes/students.ts, the teacher-override endpoint)
+   * measured against `totalQuestions`, so the ratio — not a raw
+   * `score >= 50` — is the comparison that holds across papers of any length.
+   * This is the same normalisation WorksheetsPanel.tsx already uses.
+   */
+  async getSchoolEvaluationStats(): Promise<Map<string, { students: number; assessedStudents: number; reports: number; passed: number }>> {
+    const empty = () => ({ students: 0, assessedStudents: 0, reports: 0, passed: 0 });
+    if (this.mongoDb) {
+      // Reads `evaluationReports` — the collection every live writer targets
+      // (addEvaluationReport, updateEvaluationReport, getEvaluationReports,
+      // and the studentId index in ensureIndexes).
+      const result = await this.mongoDb.collection('students').aggregate([
+        { $lookup: { from: 'evaluationReports', localField: 'id', foreignField: 'studentId', as: 'reports' } },
+        {
+          $project: {
+            schoolId: 1,
+            reportCount: { $size: '$reports' },
+            passedCount: {
+              $size: {
+                $filter: {
+                  input: '$reports',
+                  as: 'r',
+                  // $cond rather than $and so the divide is only evaluated when
+                  // totalQuestions is non-zero — $and does not short-circuit
+                  // and $divide by zero is an error, not a null.
+                  cond: {
+                    $cond: [
+                      { $gt: [{ $ifNull: ['$$r.totalQuestions', 0] }, 0] },
+                      { $gte: [{ $divide: ['$$r.score', '$$r.totalQuestions'] }, 0.5] },
+                      false,
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          $group: {
+            _id: '$schoolId',
+            students: { $sum: 1 },
+            assessedStudents: { $sum: { $cond: [{ $gt: ['$reportCount', 0] }, 1, 0] } },
+            reports: { $sum: '$reportCount' },
+            passed: { $sum: '$passedCount' },
+          }
+        }
+      ]).toArray();
+      const map = new Map<string, { students: number; assessedStudents: number; reports: number; passed: number }>();
+      result.forEach((r: any) => {
+        if (!r._id) return;
+        map.set(r._id, { students: r.students, assessedStudents: r.assessedStudents, reports: r.reports, passed: r.passed });
+      });
+      return map;
+    }
+    // JSON fallback store: the same four numbers, over the in-memory copy.
+    const stats = new Map<string, { students: number; assessedStudents: number; reports: number; passed: number }>();
+    const schoolByStudent = new Map<string, string>();
+    (this.data?.students || []).forEach(s => {
+      if (!s.schoolId) return;
+      schoolByStudent.set(s.id, s.schoolId);
+      const row = stats.get(s.schoolId) || empty();
+      row.students += 1;
+      stats.set(s.schoolId, row);
+    });
+    const assessed = new Set<string>();
+    (this.data?.evaluationReports || []).forEach(r => {
+      const schoolId = schoolByStudent.get(r.studentId);
+      if (!schoolId) return;
+      const row = stats.get(schoolId)!;
+      // Distinct students, so a child assessed several times still counts once.
+      if (!assessed.has(r.studentId)) {
+        assessed.add(r.studentId);
+        row.assessedStudents += 1;
+      }
+      row.reports += 1;
+      if ((r.totalQuestions || 0) > 0 && r.score / r.totalQuestions >= 0.5) row.passed += 1;
+    });
+    return stats;
+  }
+
   /** Fast aggregation: count of evaluation reports. */
   async countReports(): Promise<number> {
     if (this.mongoDb) {
