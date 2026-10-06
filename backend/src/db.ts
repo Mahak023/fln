@@ -1,4 +1,5 @@
 import fs from 'fs/promises';
+import { readFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import bcrypt from 'bcrypt';
@@ -20,9 +21,10 @@ const DB_FILE = path.resolve(DB_DIR, 'db.json');
 function getSeedCompetencyRequirements(): CompetencyRequirement[] {
   try {
     const seedPath = path.resolve(__dirname, 'data', 'competencyRequirements.seed.json');
-    const raw = require('fs').readFileSync(seedPath, 'utf-8');
+    const raw = readFileSync(seedPath, 'utf-8');
     return JSON.parse(raw) as CompetencyRequirement[];
-  } catch {
+  } catch (err) {
+    console.error('Failed to load competency seed data:', err);
     return [];
   }
 }
