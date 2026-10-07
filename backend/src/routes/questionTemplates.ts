@@ -19,6 +19,7 @@ import {
   MAX_SVG_THEMES,
 } from '../types/questionTemplateParams';
 import { isKnownThemeId, listThemes } from '../svgAssetCatalog';
+import { buildQuestionTemplateDownload } from '../services/questionTemplateDownload';
 
 const MAX_NAME_CHARS = 200;
 const MAX_TAGS = 20;
@@ -289,6 +290,18 @@ export function registerQuestionTemplateRoutes(app: express.Express) {
     res.type('text/csv').send(CSV_COLUMNS.join(',') + '\n');
   });
 
+  /** One download containing the unchanged import template and current references. */
+  app.get('/api/question-templates/csv-template.zip', async (req, res, next) => {
+    if (!requireSuperadmin(req, res, SUBJECT)) return;
+    try {
+      const archive = await buildQuestionTemplateDownload(CSV_COLUMNS, buildLevelMapPayload(), listThemes());
+      res.setHeader('Cache-Control', 'no-store');
+      res.attachment('question-authoring-template.zip').type('application/zip').send(archive);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get('/api/question-templates/stats', async (req, res) => {
     if (!requireSuperadmin(req, res, SUBJECT)) return;
     res.json(await dbStore.getQuestionTemplateStats(LEVEL_COUNT));
@@ -333,11 +346,16 @@ export function registerQuestionTemplateRoutes(app: express.Express) {
     const tags = normalizeTags(req.body?.tags);
     const name: string = (req.body?.name ?? '').trim();
 
+    const assessmentMode: 'written' | 'observed' | 'both' =
+      req.body?.assessmentMode && ['written', 'observed', 'both'].includes(req.body.assessmentMode)
+        ? req.body.assessmentMode
+        : 'written';
+
     const problem = validateTemplate(conceptId, skills, subskills, generationIntent, questionFamily, svgThemeIds, answerSpec, params, tags, name);
     if (problem) return res.status(400).json({ error: problem });
 
     const template = buildTemplate(
-      { conceptId, skills, subskills, generationIntent, questionFamily: questionFamily as QuestionFamily, svgThemeIds, params, name, tags, source: 'form' },
+      { conceptId, skills, subskills, generationIntent, questionFamily: questionFamily as QuestionFamily, assessmentMode, svgThemeIds, params, name, tags, source: 'form' },
       user,
       new Date().toISOString()
     );
@@ -393,6 +411,10 @@ export function registerQuestionTemplateRoutes(app: express.Express) {
     }
 
     const concept = getLevelForConcept(conceptId)!;
+    const assessmentMode: 'written' | 'observed' | 'both' =
+      req.body?.assessmentMode && ['written', 'observed', 'both'].includes(req.body.assessmentMode)
+        ? req.body.assessmentMode
+        : (current.assessmentMode ?? 'written');
 
     // The name is the author's once they have edited it, so it is only
     // re-derived when the caller explicitly asks or has left it empty.
@@ -404,6 +426,7 @@ export function registerQuestionTemplateRoutes(app: express.Express) {
       levelName: getLevel(concept.levelNumber)!.capability,
       skills,
       subskills,
+      assessmentMode,
       generationIntent: generationIntent.trim(),
       questionFamily: questionFamily as QuestionFamily,
       paramMode: 'structured' as ParamMode,
