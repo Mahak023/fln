@@ -16,8 +16,8 @@
  *
  * --- Design rationale (Balvatika print rule) ---
  *
- * Worksheets target early-grade learners (Balvatika / NEP Stages 1–3,
- * ages 3–8) whose motor and visual skills require:
+ * Worksheets target early-grade learners (Balvatika is the stage before
+ * Class 1, for ages 5–6) whose motor and visual skills require:
  *   - Large, clearly legible text (≥ 18 pt).
  *   - Generously sized answer spaces for handwriting.
  *   - Uncluttered pages — one concept-block per visual section.
@@ -41,9 +41,7 @@
  * Balvatika worksheet. Renderers must not set body/question text smaller
  * than this value.
  *
- * Rationale: NEP early-grade print guidelines and classroom testing
- * indicate that 18 pt is the smallest size reliably readable by children
- * aged 5–8 on standard A4 worksheets.
+ * Rationale: Issue [#603](https://github.com/vicharanashala/fln/issues/603) sets 18 pt as the minimum for Balvatika print.
  */
 export const MIN_FONT_SIZE_PT = 18;
 
@@ -58,8 +56,8 @@ export const MIN_FONT_SIZE_PT = 18;
  * remain scannable by the OCR/ICR evaluation pipeline.
  *
  * Current codebase reference: `paperGenerator.ts` draws answer boxes with
- * `height: 24` (line ~625). This constant formalises that value as the
- * enforced minimum.
+ * `height: 24` (around line 709). This constant formalises that value as
+ * the enforced minimum.
  */
 export const MIN_ANSWER_BOX_HEIGHT_PT = 24;
 
