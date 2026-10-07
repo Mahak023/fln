@@ -4,7 +4,7 @@ import {
   MIN_ANSWER_BOX_HEIGHT_PT,
   QUESTIONS_PER_PAGE_MAX,
   OVERFLOW_POLICY,
-} from './worksheetLayoutRules';
+} from './worksheetLayoutRules.ts';
 
 assert.strictEqual(MIN_FONT_SIZE_PT, 18);
 assert.strictEqual(MIN_ANSWER_BOX_HEIGHT_PT, 24);
