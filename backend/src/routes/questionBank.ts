@@ -1,6 +1,7 @@
 import express from 'express';
 import { dbStore, UserRole } from '../db';
 import { getAuthUser } from '../auth';
+import { LEVEL_COUNT } from '../config/skillLevelMap';
 
 /**
  * Superadmin review of the existing question bank.
@@ -89,7 +90,7 @@ export function registerQuestionBankRoutes(app: express.Express) {
         const target = await resolveTarget(Number(mappedLevel));
         if (!target) {
           return res.status(400).json({
-            error: `Level ${mappedLevel} is not a curriculum level. Valid levels are 1-108; ` +
+            error: `Level ${mappedLevel} is not a curriculum level. Valid levels are 1-${LEVEL_COUNT}; ` +
                    `if the collection is empty run "npm run seed:levels".`,
           });
         }

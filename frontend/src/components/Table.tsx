@@ -1,9 +1,11 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { ChevronDown, ChevronUp, ChevronsUpDown, Download, Search, SlidersHorizontal } from 'lucide-react';
+import { buildCsv, downloadCsv } from '../utils/csv';
 
 export interface Column<T> {
   header: string;
   accessor: keyof T | ((row: T) => React.ReactNode);
+  exportValue?: (row: T) => string | number;
   sortKey?: keyof T;
   filterKey?: keyof T;
   filterOptions?: string[];
@@ -17,6 +19,14 @@ interface TableProps<T> {
   searchKey?: keyof T | ((row: T) => string);
   loading?: boolean;
   emptyMessage?: string;
+}
+
+export function extractTableRows<T extends Record<string, any>>(data: T[], columns: Column<T>[]): (string | number)[][] {
+  return data.map(row => columns.map(col => {
+    if (col.exportValue) return col.exportValue(row);
+    if (typeof col.accessor === 'function') return row[col.sortKey as string] ?? row[col.filterKey as string] ?? '';
+    return row[col.accessor] ?? '';
+  }));
 }
 
 export function Table<T extends Record<string, any>>({
@@ -136,30 +146,9 @@ export function Table<T extends Record<string, any>>({
   const handleExportCSV = () => {
     if (processedData.length === 0) return;
     
-    // Headers
-    const headers = columns.map(c => c.header).join(',');
-    
-    // Row content
-    const csvRows = processedData.map(row => {
-      return columns.map(col => {
-        let val = '';
-        if (typeof col.accessor === 'function') {
-          val = row[col.sortKey as string] || row[col.filterKey as string] || '';
-        } else {
-          val = row[col.accessor] || '';
-        }
-        return `"${String(val).replace(/"/g, '""')}"`;
-      }).join(',');
-    });
-
-    const csvContent = "data:text/csv;charset=utf-8," + [headers, ...csvRows].join("\n");
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", "exported_table_data.csv");
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    const headers = columns.map(c => c.header);
+    const rows = extractTableRows(processedData, columns);
+    downloadCsv('exported_table_data.csv', buildCsv(headers, rows));
   };
 
   return (

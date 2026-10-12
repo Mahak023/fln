@@ -1,7 +1,6 @@
 import express from 'express';
 import { dbStore, UserRole, Student, Question, AnswerSubmission, EvaluationReport, EvaluationReasoning, CYCLE_NAMES } from '../db';
 import { answersMatch } from '../answerMatching';
-import { classifyErrorType } from '../errorClassification';
 import { getAuthUser, canAccessStudent } from '../auth';
 import { generateDiagnosticPaper } from '../paperGenerator';
 import { generateQuestionsForLevel } from '../levelGenerator';
@@ -14,6 +13,12 @@ import { CURRICULUM_MAPPING } from '../config/curriculumMap';
 import { computeStudentDisplayId } from '../displayId';
 import { tokenizeAadhaar, formatAadhaarMask, AadhaarVaultTokenizeResult } from '../aadhaarVault';
 import { generateStudentId } from '../idGenerator';
+// #402 follow-up: extracted into ../rootCauseAnalysis.ts as
+// computeRootCauseAnalysis so routes/evaluation.ts can use the exact same
+// logic — see that module for the full history (FLN #458, #459). Re-exported
+// here under its original name so this file's own call site doesn't change.
+import { computeRootCauseAnalysis as readPipelineDetail } from '../rootCauseAnalysis';
+import { LEVEL_COUNT } from '../config/skillLevelMap';
 
 // ─── Response hygiene (Phase 2 hardening) ───────────────────────────────────
 // Vault references are internal-only: MongoDB and the internal Student model
@@ -25,95 +30,6 @@ export type PublicStudent = Omit<Student, 'aadhaarTokenId' | 'aadhaarIdentityId'
 function toPublicStudent(s: Student): PublicStudent {
   const { aadhaarTokenId: _tokenId, aadhaarIdentityId: _identityId, ...pub } = s;
   return pub;
-}
-
-/**
- * Lift the per-error detail out of a wrong-answer set.
- *
- * `run_pipeline.py` used to write `root_causes` with a real `error_type` per
- * question; that pipeline is never invoked from this backend (see FLN #458 —
- * it runs on a legacy class/phrase data model with no connection to the
- * current MongoDB-backed students), so `evalData` is always `{}` here now.
- * Rather than leave every diagnostic `unclassified`, high-confidence patterns
- * are detected directly from the submitted/expected answer pair — see
- * `classifyErrorType` in `errorClassification.ts`. Nothing here is guessed:
- * a shape that doesn't match a known pattern stays `unclassified` rather than
- * having a fabricated cause attached — a fabricated cause is indistinguishable
- * from a measured one once it is downstream (FLN #459).
- */
-function readPipelineDetail(
-  evalData: any,
-  questions: Question[],
-  answers: { [questionId: string]: string }
-): {
-  rootCauses?: EvaluationReport['rootCauses'];
-  levelsFailed?: number[];
-  prerequisitesToCheck?: string[];
-  performanceByDifficulty?: EvaluationReport['performanceByDifficulty'];
-} {
-  const norm = (value: unknown) => String(value ?? '').trim().toLowerCase();
-  const rawCauses: any[] = Array.isArray(evalData?.root_causes) ? evalData.root_causes : [];
-
-  // Per-question causes, where the pipeline produced them.
-  const keyed = rawCauses.filter(c => c && (c.question_id || c.questionId));
-  let rootCauses: EvaluationReport['rootCauses'] = keyed.map(c => {
-    const questionId = String(c.question_id ?? c.questionId);
-    const question = questions.find(q => q.question_id === questionId);
-    return {
-      questionId,
-      error: String(c.error ?? answers?.[questionId] ?? ''),
-      topic: String(c.topic ?? question?.topic ?? 'Unclassified'),
-      flnLevel: Number(c.fln_level ?? c.flnLevel ?? question?.source_level ?? 0),
-      errorType: String(c.error_type ?? c.errorType ?? 'unclassified'),
-      analysis: String(c.analysis ?? '')
-    };
-  });
-
-  if (rootCauses.length === 0) {
-    // A real pipeline verdict (when one exists) always wins over the local
-    // classifier — this is the fallback for the case that's true today,
-    // where evalData is always {} because nothing wires it in (FLN #458).
-    const overallType = evalData?.error_type ? String(evalData.error_type) : null;
-    const overallAnalysis = evalData?.root_cause ? String(evalData.root_cause) : '';
-    rootCauses = questions
-      .filter(q => norm(answers?.[q.question_id]) !== norm(q.answer))
-      .map(q => ({
-        questionId: q.question_id,
-        error: String(answers?.[q.question_id] ?? ''),
-        topic: q.topic || 'Unclassified',
-        flnLevel: Number(q.source_level ?? 0),
-        errorType: overallType ?? classifyErrorType(answers?.[q.question_id], q.answer, q),
-        analysis: overallAnalysis
-      }));
-  }
-
-  // Measured from the paper when the pipeline reported no breakdown of its own.
-  let performanceByDifficulty: EvaluationReport['performanceByDifficulty'] =
-    evalData?.performance_by_difficulty && typeof evalData.performance_by_difficulty === 'object'
-      ? evalData.performance_by_difficulty
-      : undefined;
-  if (!performanceByDifficulty) {
-    const tally: NonNullable<EvaluationReport['performanceByDifficulty']> = {};
-    for (const q of questions) {
-      const difficulty = q.difficulty || 'medium';
-      const cell = tally[difficulty] ?? { attempted: 0, correct: 0 };
-      cell.attempted++;
-      if (norm(answers?.[q.question_id]) === norm(q.answer)) cell.correct++;
-      tally[difficulty] = cell;
-    }
-    if (Object.keys(tally).length > 0) performanceByDifficulty = tally;
-  }
-
-  return {
-    rootCauses: rootCauses.length > 0 ? rootCauses : undefined,
-    levelsFailed: Array.isArray(evalData?.levels_failed)
-      ? evalData.levels_failed.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n))
-      : undefined,
-    prerequisitesToCheck: Array.isArray(evalData?.prerequisites_to_check)
-      ? evalData.prerequisites_to_check.map((p: any) => String(p))
-      : undefined,
-    performanceByDifficulty
-  };
 }
 
 export function registerStudentRoutes(app: express.Express) {
@@ -713,12 +629,12 @@ export function registerStudentRoutes(app: express.Express) {
       const startLevel = (classNumber - 1) * 12 + 1;
       questions = [];
       for (let lvl = startLevel; lvl < startLevel + 8; lvl++) {
-        const lvlQuestions = generateQuestionsForLevel(Math.min(lvl, 108), 0);
+        const lvlQuestions = await generateQuestionsForLevel(Math.min(lvl, LEVEL_COUNT), 0);
         lvlQuestions.forEach(q => {
           questions.push({
             ...q,
             question_id: `DIAG_${lvl}_${q.question_id}`,
-            source_level: Math.min(lvl, 108)
+            source_level: Math.min(lvl, LEVEL_COUNT)
           });
         });
       }
@@ -820,7 +736,7 @@ export function registerStudentRoutes(app: express.Express) {
         positional[key] = String(value);
         continue;
       }
-      const posMatch = /^Q(\d+)$/i.exec(key.trim());
+      const posMatch = /^q_?(\d+)$/i.exec(key.trim());
       const q = posMatch ? questions[parseInt(posMatch[1], 10) - 1] : undefined;
       if (q) {
         positional[q.question_id] = String(value);
@@ -845,7 +761,7 @@ export function registerStudentRoutes(app: express.Express) {
               positional[key] = String(value);
               continue;
             }
-            const posMatch = /^Q(\d+)$/i.exec(key.trim());
+            const posMatch = /^q_?(\d+)$/i.exec(key.trim());
             const q = posMatch ? akQuestions[parseInt(posMatch[1], 10) - 1] : undefined;
             if (q) {
               positional[q.question_id || q.qid || ''] = String(value);
@@ -868,7 +784,7 @@ export function registerStudentRoutes(app: express.Express) {
     }
     if (Object.keys(positional).length === 0) {
       return res.status(400).json({
-        error: `None of the ${Object.keys(answers).length} answer key(s) match this student's paper. Expected question ids like "${questions[0].question_id}" or positions "Q1".."Q${questions.length}".`
+        error: `None of the ${Object.keys(answers).length} answer key(s) match this student's paper. Expected question ids like "${questions[0].question_id}" or positions "Q1".."Q${questions.length}" (also "q_1".."q_${questions.length}").`
       });
     }
     if (remapped > 0) console.log(`[baseline] remapped ${remapped} positional answer key(s) for ${student.id}`);

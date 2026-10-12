@@ -4,7 +4,7 @@ A large-scale, personalized assessment system that helps teachers measure, track
 
 > **Current build scope: Mathematics only.** "FLN" names the policy problem this project is built to eventually address in full (see [SRS.md](SRS.md)), but nothing here evaluates literacy today — every level, question, and evaluation path in this repo is numeracy. Don't read the sections below as literacy features that already exist.
 >
-> **Build order pivoted 2026-09-17 to stage-by-stage, not all-classes-at-once:** Balvatika (the year before Class 1) → Class 1 → Class 2 → Class 3, each stage frozen before the next starts. Class 4/5 are explicitly deferred to Tenali, not built here. Balvatika's 29 curriculum levels and their question-content (`generationIntent`) rows are already authored and seeded in the database, but **nothing in the codebase renders them into an actual worksheet yet** — see [issue #486](https://github.com/vicharanashala/fln/issues/486). Don't assume a level existing in `curriculumMap.ts` means a student can be assessed on it end-to-end.
+> **Build order pivoted 2026-09-17 to stage-by-stage, not all-classes-at-once:** Balvatika (the year before Class 1) → Class 1 → Class 2 → Class 3, each stage frozen before the next starts. Class 4/5 are explicitly deferred to Tenali, not built here. Balvatika's 29 curriculum levels and their question-content (`generationIntent`) rows are already authored and seeded in the database, and the generation pipeline now consumes them — `levelGenerator` queries the level's approved `questionTemplates` and renders intent → wording, numbers and answer (`backend/src/services/questionTemplateRenderer.ts`, issue #486), falling back to the legacy generators for concepts with no approved templates. Don't assume a level existing in `curriculumMap.ts` means a student can be assessed on it end-to-end.
 
 ---
 
@@ -82,7 +82,7 @@ The platform is built around **personalized, student-specific assessment**, not 
 
 Every question, worksheet, and diagnostic is pinned to one of **109 curriculum levels** (`backend/src/config/curriculumMap.ts`), each mapped to a stage, age group, and a concept ID (`S1.1`–`S7.18`). The count has moved twice: an older 59-level numbering was replaced by 93, which grew to 109 when the year before Class 1 was finalised against NCF-FS 2022 (PR #517). The migration is still in progress, and the most recently added levels have had the least real-world testing.
 
-**Stage 3 (levels 19–46, concept IDs mostly `S3.*` with a few relocated `S4`/`S5` nodes) is Balvatika** — "the year before Class 1," defined by school-admission-year, not by the child's actual age (NCF and Nipun Bharat both treat the 3/4/5 age split as tentative, so there's no age-specific sub-staging). It's the stage currently being built out: 29 nodes have curriculum entries, skill/subskill mappings, and authored `generationIntent` question content in Mongo (`backend/src/seedBalvatikaQuestionTemplates.ts`, seeded via PR #529), but the content-authoring and pipeline-wiring work were done as deliberately separate passes — see the scope note at the top of this file and issue #486.
+**Stage 3 (levels 19–46, concept IDs mostly `S3.*` with a few relocated `S4`/`S5` nodes) is Balvatika** — "the year before Class 1," defined by school-admission-year, not by the child's actual age (NCF and Nipun Bharat both treat the 3/4/5 age split as tentative, so there's no age-specific sub-staging). It's the stage currently being built out: 29 nodes have curriculum entries, skill/subskill mappings, and authored `generationIntent` question content in Mongo (`backend/src/seedBalvatikaQuestionTemplates.ts`, seeded via PR #529), and since issue #486 the generation pipeline consumes that content — an approved template for the level's concept is rendered into the sheet, with the legacy generators as the fallback when none exists.
 
 **Open, deliberately unsolved: how many questions per node are needed for mastery, and how that fits a Balvatika-length worksheet.** ~30 nodes × the ~4-5-questions/concept that standard mastery norms (and ASER's own practice) call for is a 90+ question diagnostic — infeasible for a 5-6-year-old in one sitting, and combining multiple nodes into one question (the usual fix) has limited reach here since most Balvatika nodes are independent rather than interconnected. FLN grades pass/fail per concept, never a partial score, which constrains whatever threshold gets picked. The same open question applies to teacher observation worksheets (how many times to observe a skill before ticking it off). Being researched deliberately, not guessed at under time pressure — don't hardcode a per-node question count or observation threshold until this is resolved.
 
@@ -176,20 +176,13 @@ service JWTs to the browser (see
 module is wired unconditionally at boot; no feature flag, no separate
 process, no service-JWT exchange.
 
-The module needs two env vars (both required for tokenization to succeed):
+The vault requires the following configuration settings:
 
-- `MONGODB_URI` — the FLN backend's existing Mongo connection. The vault
-  reuses the same replica set; the module fails fast with
-  `VAULT_DB_REQUIRES_REPLICA_SET` (503) if pointed at a standalone
-  `mongod` because `session.withTransaction(...)` is unsupported there.
-- `LOCAL_DEV_MASTER_KEY` — base64; ≥ 32 decoded bytes. The
-  per-record DEK wrap subkey is derived from this via
-  `HKDF-SHA-256(master, salt=context, info="aadhaar-vault/dek-wrap")`.
-  Production deployments are expected to swap `LocalDevKeyManager` for a
-  real KMS provider; the port is stable.
+- `MONGODB_URI` — the FLN backend's existing Mongo connection, which must point to a MongoDB replica set (e.g. MongoDB Atlas or a local replica set). The vault reuses this connection; the module fails fast with `VAULT_DB_REQUIRES_REPLICA_SET` (503) if pointed at a standalone `mongod` because multi-document transactions (`session.withTransaction(...)`) are unsupported there.
+- `LOCAL_DEV_MASTER_KEY` — base64-encoded key with at least 32 decoded bytes (generate with `openssl rand -base64 32`). The per-record DEK wrap subkey is derived from this master key via `HKDF-SHA-256(master, salt=context, info="aadhaar-vault/dek-wrap")`. Production deployments are expected to swap `LocalDevKeyManager` for a real KMS provider; the port is stable.
+- `VAULT_ALLOW_UNSAFE_KEY_PROVIDER=true` — required in production (`NODE_ENV=production`) because the current implementation only supports the local-development key provider (`LocalDevKeyManager`). In production mode, the key provider refuses to construct unless this flag is explicitly set to `'true'` to acknowledge the risk. Note that using the local-development key provider stores the master key in process environment variables, allowing anyone with access to the process environment to derive DEKs; deployment owners must review these security implications before production use.
 
-Until both are set, `POST /api/students` and `POST /api/students/bulk-import`
-fail with `VaultError NOT_CONFIGURED` (by design — no plaintext fallback).
+Until these settings are configured, the server logs startup warnings and `POST /api/students` and `POST /api/students/bulk-import` fail with `VaultError NOT_CONFIGURED` (by design — fail-closed with no plaintext fallback).
 
 End-to-end contract is enforced by the integration test suite at
 [`backend/tests/aadhaar-hardening.test.ts`](backend/tests/aadhaar-hardening.test.ts)

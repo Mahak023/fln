@@ -1,5 +1,6 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { Question } from "./db";
+import { LEVEL_COUNT } from "./config/skillLevelMap";
 
 // Valid Gemini model IDs, primary first then fallbacks (used by generateContentWithRetry).
 // Centralized here so the call sites below don't drift.
@@ -437,7 +438,7 @@ Diagnostic Questions: ${JSON.stringify(questions)}
 Student Submitted Answers: ${JSON.stringify(submittedAnswers)}
 
 Grade these answers. Compute total score out of ${questions.length}.
-Implement "Weakest-Level Mapping" (SRS §6.2): Assign the student to the lowest level (from 1 to 108) where they showed weakness or made mistakes, or level 1 if they struggle with everything. If they solved all perfectly, assign level 35.
+Implement "Weakest-Level Mapping" (SRS §6.2): Assign the student to the lowest level (from 1 to ${LEVEL_COUNT}) where they showed weakness or made mistakes, or level 1 if they struggle with everything. If they solved all perfectly, assign level 35.
 Provide a clean narrative feedback summary.`;
 
     const response = await generateContentWithRetry({
@@ -450,7 +451,7 @@ Provide a clean narrative feedback summary.`;
           type: Type.OBJECT,
           properties: {
             score: { type: Type.INTEGER, description: "Number of correct answers" },
-            recommendedLevel: { type: Type.INTEGER, description: "Level from 1 to 108 based on weakest-level mapping" },
+            recommendedLevel: { type: Type.INTEGER, description: `Level from 1 to ${LEVEL_COUNT} based on weakest-level mapping` },
             narrative: { type: Type.STRING, description: "Warm and encouraging narrative explaining how the student did and what they need to work on." }
           },
           required: ["score", "recommendedLevel", "narrative"]

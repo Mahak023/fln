@@ -744,6 +744,7 @@ export const SuperadminDashboard: React.FC<DashboardProps> = ({ user, token }) =
                 { header: 'Email', accessor: 'email', sortKey: 'email', className: 'font-mono text-slate-500 dark:text-slate-400' },
                 {
                   header: 'Role Tier',
+                  exportValue: (c) => c.role,
                   accessor: (c) => (
                     <span className={`px-2 py-0.5 rounded text-[9px] font-mono font-bold uppercase ${
                       c.role === UserRole.SUPERADMIN ? 'bg-slate-900 text-slate-100 dark:bg-slate-100 dark:text-slate-900' : c.role === UserRole.ADMIN ? 'bg-indigo-105 text-indigo-850 dark:bg-indigo-950 dark:text-indigo-200' : c.role === UserRole.DISTRICT_ADMIN ? 'bg-emerald-105 text-emerald-850 dark:bg-emerald-950 dark:text-emerald-200' : 'bg-amber-105 text-amber-855 dark:bg-amber-950 dark:text-amber-200'
@@ -754,6 +755,33 @@ export const SuperadminDashboard: React.FC<DashboardProps> = ({ user, token }) =
                 },
                 {
                   header: 'Assigned Scope Nodes',
+                  exportValue: (c) => {
+                    if (c.role === UserRole.SUPERADMIN) {
+                      return 'National (Global)';
+                    } else if (c.role === UserRole.ADMIN) {
+                      return `State: ${c.stateCode || 'N/A'}`;
+                    } else if (c.role === UserRole.DISTRICT_ADMIN) {
+                      return `State: ${c.stateCode || 'N/A'} / District: ${c.districtCode || 'N/A'}`;
+                    } else if (c.role === UserRole.BLOCK_ADMIN) {
+                      return `State: ${c.stateCode || 'N/A'} / Dist: ${c.districtCode || 'N/A'} / Block: ${c.blockCode || 'N/A'}`;
+                    } else if (c.role === UserRole.SCHOOL || c.role === UserRole.TEACHER) {
+                      const sch = schools.find(s => s.id === c.schoolId);
+                      return sch
+                        ? `State: ${sch.stateCode} / Dist: ${sch.districtCode} / Block: ${sch.blockCode} (${sch.name})`
+                        : `School ID: ${c.schoolId || 'N/A'}`;
+                    } else if (c.role === UserRole.VOLUNTEER) {
+                      const firstSchId = c.assignedSchools?.[0];
+                      const sch = firstSchId ? schools.find(s => s.id === firstSchId) : undefined;
+                      if (sch) {
+                        return `State: ${sch.stateCode} / Dist: ${sch.districtCode} / Block: ${sch.blockCode} (${sch.name})`;
+                      } else if (c.assignedSchools && c.assignedSchools.length > 0) {
+                        return `Schools: ${c.assignedSchools.join(', ')}`;
+                      } else {
+                        return 'No schools assigned';
+                      }
+                    }
+                    return `State: ${c.stateCode || 'N/A'} / Dist: ${c.districtCode || 'N/A'} / Block: ${c.blockCode || 'N/A'}`;
+                  },
                   accessor: (c) => {
                     let nodeScope = '';
                     if (c.role === UserRole.SUPERADMIN) {
