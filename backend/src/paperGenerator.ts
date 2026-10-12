@@ -2,8 +2,18 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
+import type { PDFFont } from 'pdf-lib';
 import { randomUUID } from 'crypto';
 import { Question, dbStore } from './db';
+import { isBalvatikaStage } from './config/curriculumMap';
+import {
+  MIN_ANSWER_BOX_HEIGHT_PT,
+  MIN_FONT_SIZE_PT,
+  PAGE_BOTTOM_MARGIN_PT,
+  QUESTIONS_PER_PAGE_MAX,
+  QUESTION_GAP_PT,
+  planQuestionPages,
+} from './config/worksheetLayoutRules';
 import { renderBatch } from './worksheetRenderer';
 import { mergeAndStamp } from './pdfMerge';
 import { drawQrCode } from './qrCode';
@@ -16,6 +26,69 @@ const __dirname = path.dirname(__filename);
 const OUTPUT_DIR = path.join(__dirname, '..', 'output');
 if (!fs.existsSync(OUTPUT_DIR)) {
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+}
+
+const PAGE_WIDTH = 595.28;
+const PAGE_HEIGHT = 841.89;
+/** Distance from the top of the page to the first question line. */
+const FIRST_QUESTION_TOP_OFFSET = 220;
+
+export function wrapTextToWidth(
+  text: string,
+  font: PDFFont,
+  fontSize: number,
+  maxWidth: number
+): string[] {
+  if (!Number.isFinite(maxWidth) || maxWidth <= 0) {
+    throw new RangeError('maxWidth must be a positive number');
+  }
+
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let currentLine = '';
+
+  const splitWord = (word: string): string[] => {
+    const segments: string[] = [];
+    let segment = '';
+
+    for (const character of Array.from(word)) {
+      const candidate = `${segment}${character}`;
+      if (font.widthOfTextAtSize(candidate, fontSize) <= maxWidth) {
+        segment = candidate;
+        continue;
+      }
+
+      if (!segment) {
+        throw new RangeError('maxWidth is narrower than a single character');
+      }
+
+      segments.push(segment);
+      segment = character;
+    }
+
+    if (segment) segments.push(segment);
+    return segments;
+  };
+
+  for (const word of words) {
+    const candidate = currentLine ? `${currentLine} ${word}` : word;
+    if (font.widthOfTextAtSize(candidate, fontSize) <= maxWidth) {
+      currentLine = candidate;
+      continue;
+    }
+
+    if (currentLine) {
+      lines.push(currentLine);
+      currentLine = '';
+    }
+
+    const wordSegments = splitWord(word);
+    lines.push(...wordSegments.slice(0, -1));
+    currentLine = wordSegments.at(-1) ?? '';
+  }
+
+  if (currentLine) lines.push(currentLine);
+  return lines;
 }
 
 /**
@@ -617,14 +690,40 @@ export async function renderWorksheetPdf({
   const font = await merged.embedFont(StandardFonts.Helvetica);
   const boldFont = await merged.embedFont(StandardFonts.HelveticaBold);
 
-  const QUESTIONS_PER_PAGE = 7;
+  const defaultQuestionsPerPage = 7;
+  const defaultQuestionFontSize = 10.5;
+  const defaultAnswerBoxHeight = 24;
 
   for (let i = 0; i < studentsWithQuestions.length; i++) {
     const swq = studentsWithQuestions[i];
-    const totalPages = Math.max(1, Math.ceil(swq.questions.length / QUESTIONS_PER_PAGE));
+    const usesBalvatikaLayout = isBalvatikaStage(swq.currentLevel);
+    const questionsPerPage = usesBalvatikaLayout ? QUESTIONS_PER_PAGE_MAX : defaultQuestionsPerPage;
+    const questionFontSize = usesBalvatikaLayout ? MIN_FONT_SIZE_PT : defaultQuestionFontSize;
+    const answerBoxHeight = usesBalvatikaLayout ? MIN_ANSWER_BOX_HEIGHT_PT : defaultAnswerBoxHeight;
+    const maxQuestionWidth = PAGE_WIDTH - 100;
+    const lineHeight = questionFontSize * 1.3;
+    // Wrap every question first so each block's height is known. The page
+    // count then flexes with the content (OVERFLOW_POLICY): a question that
+    // does not fit in the space left goes to the next page instead of
+    // running past the footer.
+    const blocks = swq.questions.map((q, index) => {
+      const lines = wrapTextToWidth(
+        `Q${index + 1}. [${q.topic}] ${q.question}`,
+        boldFont,
+        questionFontSize,
+        maxQuestionWidth
+      );
+      return { q, lines, height: lines.length * lineHeight + answerBoxHeight };
+    });
+    const pagePlan = planQuestionPages(blocks.map(b => b.height), {
+      maxPerPage: questionsPerPage,
+      availableHeight: PAGE_HEIGHT - FIRST_QUESTION_TOP_OFFSET - PAGE_BOTTOM_MARGIN_PT,
+      gap: QUESTION_GAP_PT,
+    });
+    const totalPages = Math.max(1, pagePlan.length);
 
     for (let pageIndex = 0; pageIndex < totalPages; pageIndex++) {
-      const page = merged.addPage([595.28, 841.89]);
+      const page = merged.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
       const { width, height } = page.getSize();
 
       page.drawRectangle({
@@ -697,32 +796,35 @@ export async function renderWorksheetPdf({
       }, width - 105, height - 150, 45);
 
       // Draw student-specific personalized questions
-      let currentY = height - 220;
-      const startQuestion = pageIndex * QUESTIONS_PER_PAGE;
-      const pageQuestions = swq.questions.slice(startQuestion, startQuestion + QUESTIONS_PER_PAGE);
+      let currentY = height - FIRST_QUESTION_TOP_OFFSET;
+      const pageBlocks = (pagePlan[pageIndex] ?? []).map(i => blocks[i]);
 
-      pageQuestions.forEach((q, idx) => {
-        const questionNumber = startQuestion + idx + 1;
+      pageBlocks.forEach(block => {
+        const questionLines = block.lines;
 
-        page.drawText(`Q${questionNumber}. [${q.topic}] ${q.question}`, {
-          x: 50,
-          y: currentY,
-          size: 10.5,
-          font: boldFont,
-          color: rgb(0.15, 0.15, 0.15),
+        questionLines.forEach((line, lineIndex) => {
+          page.drawText(line, {
+            x: 50,
+            y: currentY - lineIndex * lineHeight,
+            size: questionFontSize,
+            font: boldFont,
+            color: rgb(0.15, 0.15, 0.15),
+          });
         });
 
+        const textBlockHeight = questionLines.length * lineHeight;
+        const answerBoxY = currentY - textBlockHeight - answerBoxHeight;
         page.drawRectangle({
           x: 50,
-          y: currentY - 45,
+          y: answerBoxY,
           width: 150,
-          height: 24,
+          height: answerBoxHeight,
           color: rgb(1, 1, 1),
           borderColor: rgb(0.8, 0.8, 0.8),
           borderWidth: 1,
         });
 
-        currentY -= 80;
+        currentY -= textBlockHeight + answerBoxHeight + QUESTION_GAP_PT;
       });
 
       page.drawText(`Worksheet ID: ${worksheetId} - Page ${pageIndex + 1} of ${totalPages}`, {

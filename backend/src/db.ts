@@ -8,6 +8,7 @@ import { CURRICULUM_MAPPING } from './config/curriculumMap';
 import type { StudentCycleLock } from './paperLock';
 import type { ScanQualityResult } from './scanQuality';
 import type { QuestionFamily } from './types/questionTemplateParams';
+import type { ErrorType } from './errorClassification';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -409,6 +410,66 @@ export interface AnswerSubmission {
   questions?: Question[];
 }
 
+/**
+ * Evidence Model (#479): one row per question attempt, richer than
+ * `AnswerSubmission.answers`' bare string.
+ *
+ * Two attempts can both be correct and still not be equivalent evidence of
+ * whether a child can do a concept independently -- e.g. correct with zero
+ * hints on the first try vs. correct only after three hints and two tries.
+ * The architecture discussion is explicit that this has to be captured at
+ * the time, not reverse-engineered later from correct/incorrect alone --
+ * see `scaffoldingLevel`'s own comment.
+ *
+ * Deliberately a separate collection from `AnswerSubmission`, the same way
+ * `TeacherObservationRecord` (#617) is -- see that interface's comment for
+ * why a richer evidence record doesn't just get bolted onto the thing it's
+ * evidence about.
+ */
+export interface AttemptRecord {
+  id: string;
+  studentId: string;
+  questionId: string;
+  /** The worksheet/session this attempt belongs to, when one exists -- optional for the same reason `AnswerSubmission.questions` is: a live practice session may not be tied to a persisted Worksheet. */
+  worksheetId?: string;
+
+  answer: string;
+  isCorrect: boolean;
+  /** Seconds spent on this question, when the capture path can measure it. Optional: not every path can. */
+  timeTakenSeconds?: number;
+
+  hintsUsed: number;
+  attemptsBeforeSuccess: number;
+  /**
+   * 0 Independent · 1 Procedural prompt ("What operation do you need?") ·
+   * 2 Strategic prompt ("Can you first separate the tens and ones?") ·
+   * 3 Worked/example support · 4 Direct assistance (system guides step by
+   * step). A closed 0-4 scale, not free text, per #479's acceptance
+   * criteria. An `independenceScore`, if wanted downstream, is meant to be
+   * DERIVED from this + `attemptsBeforeSuccess` + `hintsUsed` -- not stored
+   * as its own separate field.
+   */
+  scaffoldingLevel: 0 | 1 | 2 | 3 | 4;
+  /** How the question was presented/answered (e.g. 'numeric', 'visual', 'verbal'). Left as an open string -- the architecture discussion names this field but, unlike scaffoldingLevel, doesn't define a closed vocabulary for it. */
+  representation?: string;
+
+  /**
+   * Required, not optional (#479 acceptance criteria) -- this is the join
+   * key to #459. Uses #459's own `ErrorType` values (unanswered,
+   * digit_reversal, decimal_place_shift, off_by_one, unclassified) so this
+   * actually joins to that data instead of drifting into a different
+   * vocabulary -- `EvaluationReport.rootCauses`' conceptual/careless/
+   * prerequisite categories are a different classification, not this one.
+   * 'none' is the one addition: it covers a fully correct attempt, which
+   * has no error to classify and isn't a value #459 itself produces.
+   */
+  errorType: ErrorType | 'none';
+
+  recordedAt: string;
+  /** teacherId/volunteerId who captured this attempt. */
+  recordedBy: string;
+}
+
 export type ConfidenceLevel = 'Very High' | 'High' | 'Moderate' | 'Low';
 
 export interface TeacherActionPlanStep {
@@ -784,6 +845,16 @@ export interface QuestionLogic {
 }
 
 /**
+ * Approval states for a question template, per #451's propose/approve
+ * vocabulary — declared here (rather than only in the workflow issue) because
+ * #486's generation gate already needs a closed set to test membership
+ * against, and two spellings of the same four states would be a bug nobody
+ * notices until a row is stranded between them.
+ */
+export const QUESTION_TEMPLATE_STATUSES = ['draft', 'pendingApproval', 'approved', 'rejected'] as const;
+export type QuestionTemplateStatus = (typeof QUESTION_TEMPLATE_STATUSES)[number];
+
+/**
  * A Superadmin-authored question: the stem a child reads, how the answer is
  * recorded, and the constraints that govern the numbers inside it.
  *
@@ -825,6 +896,16 @@ export interface QuestionTemplate {
    * `'observed'`/`'both'` are opt-in on new rows, not inferred.
    */
   assessmentMode: 'written' | 'observed' | 'both';
+
+  /**
+   * Approval state for generation. Reuses #451's vocabulary so the
+   * propose/approve workflow lands on this field instead of a second one.
+   *
+   * `undefined` (every row written before this field existed) is read as
+   * `'approved'` by `isApprovedForGeneration` — see that function for why
+   * defaulting to approved is the safe reading rather than an oversight.
+   */
+  status?: QuestionTemplateStatus;
 
   /**
    * What the question should make the child do, in the author's words. This is
@@ -1103,6 +1184,7 @@ interface DatabaseSchema {
   studentCycleLocks: StudentCycleLock[];
   generationWindows: WorksheetGenerationWindow[];
   teacherObservationRecords: TeacherObservationRecord[];
+  attemptRecords: AttemptRecord[];
 }
 
 const COLLECTION_NAMES: Record<keyof DatabaseSchema, string> = {
@@ -1134,6 +1216,7 @@ const COLLECTION_NAMES: Record<keyof DatabaseSchema, string> = {
   studentCycleLocks: 'studentCycleLocks',
   generationWindows: 'generationWindows',
   teacherObservationRecords: 'teacher_observation_records',
+  attemptRecords: 'attempt_records',
 };
 
 /**
@@ -1351,6 +1434,15 @@ export class DBStore {
           console.log('Successfully ensured indexes on "evaluationReports" collection');
         } catch (e: any) {
           console.warn('Failed to ensure indexes on "evaluationReports" collection:', e.message);
+        }
+
+        // #479: getAttemptRecordsForStudent is the only read today, keyed
+        // by studentId.
+        try {
+          await db.collection('attempt_records').createIndex({ studentId: 1 });
+          console.log('Successfully ensured indexes on "attempt_records" collection');
+        } catch (e: any) {
+          console.warn('Failed to ensure indexes on "attempt_records" collection:', e.message);
         }
 
         for (const [key, collName] of Object.entries(COLLECTION_NAMES)) {
@@ -1978,15 +2070,15 @@ export class DBStore {
      * Updated 2026-09-18 for PR #517 (the year-before-Class-1/"Balvatika" stage
      * finalisation against NCF-FS), which added 15 nodes and moved 4 nodes into
      * Stage 3, shifting every boundary below from L28 onward. The registry is
-     * now 108 levels, not 93.
+     * now 109 levels, not 93 (L-to-S crosswalk, PR #554).
      *
-     *   Pre-school 1:            1-7
-     *   Pre-school 2:            8-17
-     *   Year before Class 1:    18-46   (was Pre-school 3, 18-27 — see curriculumMap.ts)
-     *   Class 1:                47-59
-     *   Class 2:                60-76
-     *   Class 3:                77-90
-     *   Class 4:                91-108
+     *   Pre-school 1:            1-8
+     *   Pre-school 2:            9-18
+     *   Year before Class 1:    19-46   (Pre-school 3, the Balvatika stage — see curriculumMap.ts)
+     *   Class 1:                47-60
+     *   Class 2:                61-77
+     *   Class 3:                78-91
+     *   Class 4:                92-109
      *
      * classNumber here is documented (db.ts CertificationEligibility etc.) as 2-4
      * per SRS §3 — the classNumber<=1 branch exists but Class 1 / the year-before
@@ -1994,10 +2086,10 @@ export class DBStore {
      * + teacher-observation worksheet generation for that stage is still to be built).
      */
   static classLevelRange(classNumber: number): { min: number; max: number } {
-    if (classNumber <= 1) return { min: 47, max: 59 }; // class 1
-    if (classNumber === 2) return { min: 60, max: 76 };
-    if (classNumber === 3) return { min: 77, max: 90 };
-    return { min: 91, max: 108 }; // class 4 (and any >4 default)
+    if (classNumber <= 1) return { min: 47, max: 60 }; // class 1
+    if (classNumber === 2) return { min: 61, max: 77 };
+    if (classNumber === 3) return { min: 78, max: 91 };
+    return { min: 92, max: 109 }; // class 4 (and any >4 default)
   }
 
   /**
@@ -2810,6 +2902,46 @@ export class DBStore {
     return school;
   }
 
+  async deleteSchool(id: string): Promise<boolean> {
+    if (this.mongoDb) {
+      await this.mongoDb.collection('schools').deleteOne({ id });
+    }
+    if (this.data) {
+      const idx = this.data.schools.findIndex(s => s.id === id);
+      if (idx !== -1) {
+        this.data.schools.splice(idx, 1);
+        if (!this.mongoDb) await this.save();
+      }
+    }
+    return true;
+  }
+
+  async deleteUser(id: string): Promise<boolean> {
+    if (this.mongoDb) {
+      await this.mongoDb.collection('users').deleteOne({ id });
+    }
+    if (this.data) {
+      const idx = this.data.users.findIndex(u => u.id === id);
+      if (idx !== -1) {
+        this.data.users.splice(idx, 1);
+        if (!this.mongoDb) await this.save();
+      }
+    }
+    return true;
+  }
+
+  async deleteClassesForSchool(schoolId: string): Promise<number> {
+    if (this.mongoDb) {
+      await this.mongoDb.collection('classes').deleteMany({ schoolId });
+    }
+    if (this.data) {
+      const initialLen = this.data.classes.length;
+      this.data.classes = this.data.classes.filter(c => c.schoolId !== schoolId);
+      if (!this.mongoDb && this.data.classes.length !== initialLen) await this.save();
+    }
+    return 0;
+  }
+
   async addLog(log: LogEntry) {
     // Phase 2 hardening fix: guard the Mongo write like addStudent() does.
     // Previously `this.mongoDb!` crashed here whenever MongoDB was absent
@@ -3187,6 +3319,30 @@ export class DBStore {
       { $set: record },
       { upsert: true }
     );
+    return record;
+  }
+
+  // --- Attempt Record Methods (Evidence Model, #479) ----------------------
+  // See AttemptRecord's own comment for what this captures and why it's a
+  // separate collection from answerSubmissions.
+
+  /** Every attempt one student has made; richest-evidence-first filtering/sorting is left to callers. */
+  async getAttemptRecordsForStudent(studentId: string): Promise<AttemptRecord[]> {
+    if (!this.mongoDb) return (this.data?.attemptRecords || []).filter(a => a.studentId === studentId);
+    return await this.mongoDb!.collection<AttemptRecord>('attempt_records').find({ studentId }).toArray();
+  }
+
+  /** Append-only -- an attempt is a historical fact, not something a later attempt should overwrite. */
+  async addAttemptRecord(record: AttemptRecord): Promise<AttemptRecord> {
+    if (!this.mongoDb) {
+      if (this.data) {
+        if (!this.data.attemptRecords) this.data.attemptRecords = [];
+        this.data.attemptRecords.push(record);
+        await this.save();
+      }
+      return record;
+    }
+    await this.mongoDb!.collection('attempt_records').insertOne(record);
     return record;
   }
 
@@ -5411,7 +5567,10 @@ export class DBStore {
       // Seeded empty on purpose, same reasoning as questionLogics above: a
       // teacher's observation of a real child is not something to fabricate
       // demo data for.
-      teacherObservationRecords: []
+      teacherObservationRecords: [],
+      // Same reasoning again -- a child's actual hints/scaffolding evidence
+      // isn't something to fabricate demo data for either.
+      attemptRecords: []
     };
   }
 }
