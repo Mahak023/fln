@@ -353,7 +353,7 @@ export const Layout: React.FC<LayoutProps> = ({
         </div>
 
         {/* Topbar Right Section */}
-        <div className="flex items-center gap-2 md:gap-4">
+        <div className="flex flex-wrap items-center justify-end gap-2 md:flex-nowrap md:gap-4">
           {/* Language Switcher — dashboard chrome labels remain English for now;
               the landing page hero/stats/vision copy is already routed through t(). */}
           <div className="hidden md:block"><LanguageSwitcher /></div>
