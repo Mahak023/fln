@@ -70,7 +70,9 @@ The platform is structured as an **npm-workspaces monorepo** with three active w
 |---|---|---|
 | `frontend/` (`@fln/frontend`) | React 19, Vite, Tailwind CSS, TanStack Query | Client application serving interactive dashboards across all 7 roles, ICR scanning interfaces, and curriculum/question authoring panels. Proxies `/api/*` requests to `:3000`. |
 | `backend/` (`@fln/backend`) | Node.js, Express, TypeScript, native MongoDB driver, Puppeteer, esbuild | Modular Express API structured into distinct route modules under `backend/src/routes/`. Handles authentication, student records, worksheet PDF rendering, and vault encryption. |
-| `ai-services/` | Python 3, Gemini API, OCR | Backend-invoked evaluation pipeline for handwriting recognition, ICR assessment scoring, and error analysis. |
+| `backend/fln-backend/` (`fln-worksheet-backend`) | Node.js, Express, Puppeteer | Batch-generates personalised worksheets, answer keys and OMR coordinates by driving the browser app headlessly. |
+
+`ai-services/` (Python 3, Gemini API, OCR) is not an npm workspace; it holds the handwriting-recognition and scoring pipeline that the backend calls.
 
 ### Key Architectural Highlights
 
