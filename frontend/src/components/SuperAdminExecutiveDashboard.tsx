@@ -988,15 +988,10 @@ export const SuperAdminExecutiveDashboard: React.FC<SuperAdminDashboardProps> = 
                     <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
                       State Filter:
                     </label>
-<<<<<<< HEAD
                     <select
+                      aria-label="State Filter"
                       value={schoolStateFilter}
                       onChange={(e) => setSchoolStateFilter(e.target.value)}
-=======
-                    <select aria-label="State Filter"
-                      value={rankingsStateFilter}
-                      onChange={(e) => setRankingsStateFilter(e.target.value)}
->>>>>>> d77939ca (frontend: name the dropdowns, checkbox and bell button)
                       className="text-xs bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-1.5 font-semibold text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500"
                     >
                       <option value="ALL">All India</option>
