@@ -89,7 +89,7 @@ export function registerAnalyticsRoutes(app: express.Express) {
               { projection: { id: 1 } }
             ).toArray()).map((s: any) => s.id);
             if (studentIds.length === 0) return 0;
-            return await dbStore.getDb()!.collection('evaluation_reports').countDocuments({ studentId: { $in: studentIds } });
+            return await dbStore.getDb()!.collection('evaluationReports').countDocuments({ studentId: { $in: studentIds } });
           }
           const studentIds = ((dbStore as any).data?.students || [])
             .filter((s: any) => assignedSchools.includes(s.schoolId))
@@ -152,6 +152,26 @@ export function registerAnalyticsRoutes(app: express.Express) {
       stateCodeParam = user.stateCode || '';
       districtCodeParam = user.districtCode || '';
       blockCodeParam = user.blockCode || '';
+    }
+
+    // Fail closed: an admin whose own area is missing must not fall through to unscoped data.
+    const missingScope =
+      (role === UserRole.ADMIN && !user.stateCode) ||
+      (role === UserRole.DISTRICT_ADMIN && (!user.stateCode || !user.districtCode)) ||
+      (role === UserRole.BLOCK_ADMIN && (!user.stateCode || !user.districtCode || !user.blockCode));
+    if (missingScope) {
+      return res.json({
+        totalStudents: 0,
+        totalSchools: 0,
+        totalWorksheets: 0,
+        certificationPercent: 0,
+        pipeline: { conducted: 0, scanned: 0, evaluated: 0, certified: 0 },
+        roleScope: role,
+        national: null,
+        state: null,
+        district: null,
+        block: null,
+      });
     }
 
     const stateFilter = stateCodeParam ? { stateCode: stateCodeParam } : undefined;

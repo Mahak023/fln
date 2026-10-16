@@ -222,5 +222,40 @@ test('Issue #448: Analytics API Role-Based Scoping & Principal Data Isolation', 
     assert.equal(res.status, 401);
   });
 
+  await t.test('7. Mongo path reads the evaluationReports collection', async () => {
+    const seen: string[] = [];
+    const original = dbStore.getDb.bind(dbStore);
+    (dbStore as any).getDb = () => ({
+      collection: (name: string) => {
+        seen.push(name);
+        return {
+          countDocuments: async () => 0,
+          find: () => ({ toArray: async () => [{ id: 'stu-01' }] }),
+        };
+      },
+    });
+    try {
+      await fetch(`${baseUrl}/api/analytics`, { headers: { Authorization: `Bearer ${principalToken}` } });
+    } finally {
+      (dbStore as any).getDb = original;
+    }
+    assert.ok(seen.includes('evaluationReports'), `expected evaluationReports, saw: ${seen.join(', ')}`);
+    assert.ok(!seen.includes('evaluation_reports'), 'evaluation_reports is not a collection');
+  });
+
+  await t.test('8. State admin without a stateCode gets an empty result, not national data', async () => {
+    const noState = { id: 'user-admin-nostate', name: 'Admin No State', email: 'nostate@fln.gov.in', role: UserRole.ADMIN } as User;
+    (dbStore as any).data.users.push(noState);
+    const token = jwt.sign({ email: noState.email }, JWT_SECRET);
+    const res = await fetch(`${baseUrl}/api/analytics?stateCode=RJ&districtCode=JAI`, { headers: { Authorization: `Bearer ${token}` } });
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.totalSchools, 0);
+    assert.equal(data.totalStudents, 0);
+    assert.equal(data.state, null);
+    assert.equal(data.district, null);
+  });
+
   server.close();
 });
+
