@@ -8,7 +8,7 @@
 
 ## 1. What is FLN?
 
-**FLN** stands for **Foundational Literacy and Numeracy**. In primary education—specifically focusing on children from Balvatika / preschool up through Classes 1 to 4 (ages 3 to 10)—foundational literacy and numeracy represent the indispensable cognitive bridge required for all subsequent learning. The educational core of the FLN initiative (aligned with national mandates like NIPUN Bharat) is grounded in a simple pedagogical truth: a child who has not attained foundational competency in number recognition, place value, basic arithmetic, and reading comprehension cannot successfully engage with higher-grade curricula.
+**FLN** stands for **Foundational Literacy and Numeracy**. In primary education—specifically focusing on children from Balvatika (the year before Class 1) up to Class 3—foundational literacy and numeracy represent the indispensable cognitive bridge required for all subsequent learning. The educational core of the FLN initiative (aligned with national mandates like NIPUN Bharat) is grounded in a simple pedagogical truth: a child who has not attained foundational competency in number recognition, place value, basic arithmetic, and reading comprehension cannot successfully engage with higher-grade curricula.
 
 ### The Educational Problem
 
@@ -91,7 +91,7 @@ The system is governed by a strict 7-tier role-based access control (RBAC) hiera
 1. **Student** (`backend/src/db.ts`): Core learner entity tracking `currentLevel`, `targetLevel`, `levelHistory`, attendance, and demographic metadata. PII is safeguarded; national identifiers are tokenized (`aadhaarTokenId`, `aadharMasked`) via the Aadhaar Vault.
 2. **School & ClassGroup**: Establish geographic and institutional boundaries, isolating student rosters and governing teacher authorization.
 3. **QuestionTemplate & QuestionBank**: Reusable assessment items authored by superadmins with metadata: `skills`, `difficulty`, `tags`, and `assessmentMode` (`written`, `observed`, or `both`).
-4. **Worksheet**: Generated question sets constrained by assessment cycle locks (`Baseline`, `Midline`, `Endline`) and timing windows (`printWindow`, `submissionWindow`).
+4. **Worksheet**: Generated question sets constrained by assessment cycle locks (`Baseline`, `Mid-year`, `End-of-year`) and timing windows (`printWindow`, `submissionWindow`).
 5. **AnswerSubmission**: Captures raw student responses per question, preserving handwriting scan results or manual entry.
 6. **EvaluationReport**: Stores evaluated assessment outcomes (question correctness, skill mastery, detected root causes, and recommended next level), driving level promotion.
 7. **Aadhaar Vault**: High-security, fail-closed cryptographic tokenization module using envelope encryption (AES-256-GCM) with TOTP-based step-up multi-factor authentication (MFA).
@@ -139,12 +139,12 @@ During thorough exploration and testing of the repository, the following archite
 - **Location**:
   - `frontend/src/components/panels/AnalyticsPanel.tsx` (lines 35, 43, 51)
 - **What**:
-  - On the Analytics dashboard for school principals and teachers, the top summary card displays `"Total Schools: 1 — Assigned facility"` even while the schools API (`/api/schools`) is still loading, has failed with a network/server error, or returned an empty array (`"No school data available"`).
+  - On the Analytics dashboard for school principals and teachers, the top summary card displays `"Total Schools: 0 — Assigned facility"` even while the schools API (`/api/schools`) is still loading, has failed with a network/server error, or returned an empty array (`"No school data available"`), showing `0` in those states.
   - The calculation on line 35 derived the count from `currentUser.schoolId`:
     ```ts
-    const totalSchoolsCount = isPrincipal ? (currentUser.schoolId ? 1 : Math.min(schools.length, 1)) : schools.length;
+    const totalSchoolsCount = isPrincipal ? (currentUser.schoolId ? (schools.some(s => s.id === currentUser.schoolId) ? 1 : 0) : 0) : schools.length;
     ```
-    This evaluated to `1` based on user session properties rather than the loaded dataset (`data.length`).
+    This now evaluates to `0` while the schools list is loading, when it fails, and when it is empty, because the card does not look at the loading or error state. The card should show "—" in the first two cases and `0` only when the list is really empty.
 - **Why it matters**:
   - Confuses educators by presenting contradictory UI states: the summary card claims a school exists (`Total Schools: 1`) while the table directly below displays an error banner (`"Failed to load schools"`) or an empty notice.
   - Violates UI state honesty; metric cards should accurately reflect backend data status.
