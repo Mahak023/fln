@@ -153,12 +153,19 @@ export function registerCertificationRoutes(app: express.Express) {
       const students = await dbStore.getStudentsByIds([...new Set(filtered.map(c => c.studentId))]);
       const byId = new Map(students.map(s => [s.id, s]));
       const stateSchoolIds = user.role === UserRole.ADMIN
-        ? new Set((await dbStore.getSchools()).filter(s => s.stateCode === user.stateCode).map(s => s.id))
-        : undefined;
-      filtered = filtered.filter(c => {
-        const st = byId.get(c.studentId);
-        return !!st && canAccessStudent(user, st) && (!stateSchoolIds || stateSchoolIds.has(st.schoolId));
-      });
+  ? new Set(user.stateCode
+      ? (await dbStore.getSchools()).filter(s => s.stateCode === user.stateCode).map(s => s.id)
+      : [])
+  : undefined;
+      const allowed = await Promise.all(
+  filtered.map(async c => {
+    const st = byId.get(c.studentId);
+    return !!st
+      && await canAccessStudent(user, st)
+      && (!stateSchoolIds || stateSchoolIds.has(st.schoolId));
+  })
+);
+filtered = filtered.filter((_, i) => allowed[i]);
     }
     res.json(filtered);
   });
