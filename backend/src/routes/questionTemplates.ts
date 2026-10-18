@@ -1,8 +1,8 @@
 import express from 'express';
 import { randomUUID } from 'crypto';
-import { dbStore, QuestionTemplate } from '../db';
+import { dbStore, QuestionTemplate, QuestionTemplateStatus, QUESTION_TEMPLATE_STATUSES } from '../db';
 import { requireSuperadmin } from './superadminGuard';
-import { getLevel, isSkillMappedToLevel, isSubskillUnderSkills, buildLevelMapPayload, LEVEL_COUNT } from '../config/skillLevelMap';
+import { getLevel, isSkillMappedToLevel, isSubskillUnderSkills, buildLevelMapPayload, LEVEL_COUNT, listStages, resolveStage } from '../config/skillLevelMap';
 import { getLevelForConcept } from '../config/curriculumMap';
 import {
   QuestionTemplateParams,
@@ -20,6 +20,7 @@ import {
 } from '../types/questionTemplateParams';
 import { isKnownThemeId, listThemes } from '../svgAssetCatalog';
 import { buildQuestionTemplateDownload } from '../services/questionTemplateDownload';
+import { isValidErrorTag } from '../errorTags';
 
 const MAX_NAME_CHARS = 200;
 const MAX_TAGS = 20;
@@ -29,6 +30,21 @@ const MAX_IMPORT_ROWS = 1000;
 const ASSESSMENT_MODES = ['written', 'observed', 'both'] as const;
 
 const SUBJECT = 'question templates';
+
+/**
+ * Narrow an incoming status to the closed set, or null.
+ *
+ * Kept separate from `validateTemplate` because status is not part of what
+ * makes a template well-formed — it is the gate #486's generator reads — and
+ * a PATCH that only moves a row to `pendingApproval` should not have to
+ * re-prove that its skills map to its concept.
+ */
+function parseStatus(value: unknown): QuestionTemplateStatus | null {
+  if (typeof value !== 'string') return null;
+  return (QUESTION_TEMPLATE_STATUSES as readonly string[]).includes(value)
+    ? (value as QuestionTemplateStatus)
+    : null;
+}
 
 /**
  * Server-side validation of a whole template.
@@ -154,6 +170,28 @@ function normalizeTags(raw: unknown): string[] {
  * the form and the same row imported from a CSV are byte-for-byte the same
  * document, rather than two shapes that only mostly agree.
  */
+export function resolveTemplateTopic(conceptId: string, questionFamily?: string, explicitTopic?: string): string | null {
+  if (explicitTopic && typeof explicitTopic === 'string' && explicitTopic.trim()) {
+    return explicitTopic.trim().toLowerCase();
+  }
+  if (questionFamily) {
+    const qf = questionFamily.toLowerCase();
+    if (qf === 'counting') return 'counting';
+    if (qf === 'shape' || qf === 'shapes') return 'shapes';
+    if (qf === 'pattern' || qf === 'patterns') return 'patterns';
+    if (qf === 'literacy') return 'literacy';
+  }
+  const concept = getLevelForConcept(conceptId);
+  if (concept?.strand) {
+    const strand = concept.strand.toLowerCase();
+    if (strand.includes('shape')) return 'shapes';
+    if (strand.includes('pattern')) return 'patterns';
+    if (strand.includes('literacy')) return 'literacy';
+    if (strand.includes('number') || strand.includes('count')) return 'counting';
+  }
+  return null;
+}
+
 function buildTemplate(
   input: {
     conceptId: string;
@@ -165,7 +203,15 @@ function buildTemplate(
     params: QuestionTemplateParams;
     name: string;
     tags: string[];
+    errorTag?: string;
     source: 'form' | 'csv';
+    /**
+     * Optional, defaults to 'approved' -- a Superadmin's own row is usable
+     * the moment it is written, which is how every template authored before
+     * this field existed behaves. 'draft'/'pendingApproval'/'rejected' are
+     * opt-in on new rows, and #451's workflow will drive them.
+     */
+    status?: QuestionTemplateStatus;
     /**
      * Optional, defaults to 'written' -- matches every template authored
      * before this field existed (2026-09-19). The authoring form/CSV
@@ -188,6 +234,7 @@ function buildTemplate(
     skills: input.skills,
     subskills: input.subskills,
     assessmentMode: input.assessmentMode ?? 'written',
+    status: input.status ?? 'approved',
     generationIntent: input.generationIntent.trim(),
     questionFamily: input.questionFamily,
     paramMode: 'structured',
@@ -209,6 +256,7 @@ function buildTemplate(
     name: input.name.trim() || deriveTemplateName(params),
     variantKey: variantKeyFor(input.conceptId, params),
     tags: input.tags,
+    errorTag: input.errorTag,
     source: input.source,
     createdBy: user.id,
     createdByEmail: user.email,
@@ -295,9 +343,18 @@ export function registerQuestionTemplateRoutes(app: express.Express) {
   app.get('/api/question-templates/csv-template.zip', async (req, res, next) => {
     if (!requireSuperadmin(req, res, SUBJECT)) return;
     try {
-      const archive = await buildQuestionTemplateDownload(CSV_COLUMNS, buildLevelMapPayload(), listThemes());
+      const raw = req.query.stage;
+      let stage: string | undefined;
+      if (raw !== undefined && raw !== '') {
+        stage = typeof raw === 'string' ? resolveStage(raw) ?? undefined : undefined;
+        if (!stage) return res.status(400).json({
+          error: 'Unknown stage.', validStages: listStages().map(s => s.label),
+        });
+      }
+      const archive = await buildQuestionTemplateDownload(CSV_COLUMNS, buildLevelMapPayload(), listThemes(), { stage });
+      const slug = stage ? '-' + listStages().find(s => s.stage === stage)!.label.toLowerCase().replace(/\s+/g, '-') : '';
       res.setHeader('Cache-Control', 'no-store');
-      res.attachment('question-authoring-template.zip').type('application/zip').send(archive);
+      res.attachment(`question-authoring-template${slug}.zip`).type('application/zip').send(archive);
     } catch (error) {
       next(error);
     }
@@ -352,12 +409,28 @@ export function registerQuestionTemplateRoutes(app: express.Express) {
       return res.status(400).json({ error: 'assessmentMode must be written, observed or both.' });
     }
     const assessmentMode: 'written' | 'observed' | 'both' = rawMode ?? 'written';
+    let status: QuestionTemplateStatus = 'approved';
+    if (req.body?.status !== undefined && req.body?.status !== null) {
+      const parsed = parseStatus(req.body.status);
+      if (!parsed) return res.status(400).json({ error: `status must be one of ${QUESTION_TEMPLATE_STATUSES.join(', ')}.` });
+      status = parsed;
+    }
 
     const problem = validateTemplate(conceptId, skills, subskills, generationIntent, questionFamily, svgThemeIds, answerSpec, params, tags, name);
     if (problem) return res.status(400).json({ error: problem });
 
+    const errorTag: string | undefined = req.body?.errorTag !== undefined && req.body?.errorTag !== null && String(req.body.errorTag).trim() !== ''
+      ? String(req.body.errorTag).trim()
+      : undefined;
+    if (errorTag) {
+      const topic = resolveTemplateTopic(conceptId, questionFamily, req.body?.topic);
+      if (!topic || !isValidErrorTag(topic, errorTag)) {
+        return res.status(400).json({ error: `Unknown error tag '${errorTag}'${topic ? ` for topic '${topic}'` : ''}.` });
+      }
+    }
+
     const template = buildTemplate(
-      { conceptId, skills, subskills, generationIntent, questionFamily: questionFamily as QuestionFamily, assessmentMode, svgThemeIds, params, name, tags, source: 'form' },
+      { conceptId, skills, subskills, generationIntent, questionFamily: questionFamily as QuestionFamily, assessmentMode, svgThemeIds, params, name, tags, errorTag, source: 'form', status },
       user,
       new Date().toISOString()
     );
@@ -401,6 +474,15 @@ export function registerQuestionTemplateRoutes(app: express.Express) {
     const params = coerceParams({ ...current, ...req.body });
     const name: string = (req.body?.name ?? current.name).trim();
 
+    // Status moves on its own: an approval transition should not be blocked by
+    // (or require re-validating) the content of a row the author did not touch.
+    let status: QuestionTemplateStatus = current.status ?? 'approved';
+    if (req.body?.status !== undefined && req.body?.status !== null) {
+      const parsed = parseStatus(req.body.status);
+      if (!parsed) return res.status(400).json({ error: `status must be one of ${QUESTION_TEMPLATE_STATUSES.join(', ')}.` });
+      status = parsed;
+    }
+
     const problem = validateTemplate(conceptId, skills, subskills, generationIntent, questionFamily, svgThemeIds, answerSpec, params, tags, name);
     if (problem) {
       // Make the concept-only case actionable rather than merely rejected.
@@ -410,6 +492,16 @@ export function registerQuestionTemplateRoutes(app: express.Express) {
         });
       }
       return res.status(400).json({ error: problem });
+    }
+
+    const errorTag: string | undefined = req.body?.errorTag !== undefined
+      ? (req.body.errorTag && String(req.body.errorTag).trim() !== '' ? String(req.body.errorTag).trim() : undefined)
+      : current.errorTag;
+    if (errorTag) {
+      const topic = resolveTemplateTopic(conceptId, questionFamily, req.body?.topic);
+      if (!topic || !isValidErrorTag(topic, errorTag)) {
+        return res.status(400).json({ error: `Unknown error tag '${errorTag}'${topic ? ` for topic '${topic}'` : ''}.` });
+      }
     }
 
     const concept = getLevelForConcept(conceptId)!;
@@ -434,6 +526,7 @@ export function registerQuestionTemplateRoutes(app: express.Express) {
       generationIntent: generationIntent.trim(),
       questionFamily: questionFamily as QuestionFamily,
       paramMode: 'structured' as ParamMode,
+      status,
       svgThemeIds,
       numeralRange: params.numeralRange,
       digitCount: params.digitCount,
@@ -449,6 +542,7 @@ export function registerQuestionTemplateRoutes(app: express.Express) {
       name: regenerate ? deriveTemplateName(params) : name,
       variantKey: variantKeyFor(conceptId, params),
       tags,
+      errorTag,
       updatedAt: new Date().toISOString(),
       updatedBy: user.id,
       updatedByEmail: user.email,

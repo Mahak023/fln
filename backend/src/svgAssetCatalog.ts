@@ -100,6 +100,21 @@ export function pickVariant(themeId: string, seed: string): SvgThemeVariant | un
 }
 
 /**
+ * The markup of one artwork file, or null when it cannot be read.
+ *
+ * The file name comes from the manifest, but a manifest can be edited, so it is
+ * accepted only as a bare file name inside the artwork folder (no path parts).
+ */
+export function readVariantSvg(variant: SvgThemeVariant): string | null {
+  if (!/^[\w.-]+\.svg$/.test(variant.file) || variant.file.includes('..')) return null;
+  try {
+    return fs.readFileSync(path.resolve(path.dirname(manifestPath()), variant.file), 'utf-8');
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Reject anything that is not a plain, self-contained drawing.
  *
  * Applied at import time, never at render time. An SVG is executable markup:

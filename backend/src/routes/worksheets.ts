@@ -17,8 +17,14 @@ import { getAuthUser } from '../auth';
 import { generateQuestionsForLevel } from '../levelGenerator';
 import * as levelsBackendClient from '../levelsBackendClient';
 import { ROOT_DIR } from '../config';
+import { getLevelForConcept } from '../config/curriculumMap';
+import { PAPER_TYPE_CONFIG, getPaperTypeConfig, spreadQuestionCount } from '../config/paperTypeConfig';
 import { recordStudentCycleLock } from '../paperLock';
-import { getGenerationWindowStatus } from '../generationWindowRules';
+import {
+  getGenerationWindowStatus,
+  getLatestGenerationWindow,
+  isWorksheetGenerationLocked
+} from '../generationWindowRules';
 /**
  * Shared pipeline: build a roster -> Levels_backend /api/generate-batch ->
  * poll /api/batch-status -> /api/download-batch (zip) -> unpack
@@ -168,225 +174,206 @@ export function registerWorksheetRoutes(app: express.Express) {
     return res.json(worksheets);
   });
     app.post('/api/worksheets/generation-window/start', async (req, res) => {
-    const user = getAuthUser(req);
-    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+      const user = getAuthUser(req);
+      if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
-    const { classId, cycle } = req.body;
+      const { classId, cycle } = req.body;
 
-    const validCycles = CYCLE_NAMES;
+      const validCycles = CYCLE_NAMES;
 
-    if (!classId || !cycle) {
-      return res.status(400).json({
-        error: 'Class ID and assessment cycle are required.'
-      });
-    }
-
-    if (!validCycles.includes(cycle)) {
-      return res.status(400).json({
-        error: 'Invalid assessment cycle.'
-      });
-    }
-
-    const classes = await dbStore.getClasses();
-    const classObj = classes.find(c => c.id === classId);
-    if (!classObj) return res.status(404).json({ error: 'Class not found.' });
-
-    if (user.role !== UserRole.TEACHER && user.role !== UserRole.SCHOOL) {
-      return res.status(403).json({
-        error: 'Only teachers or school users can start a worksheet generation window.'
-      });
-    }
-
-    if (user.schoolId !== classObj.schoolId) {
-      return res.status(403).json({ error: 'Access denied.' });
-    }
-
-    const existingWindows = await dbStore.getGenerationWindows();
-    const existingWindow = existingWindows
-      .filter(
-        window => window.classId === classId && window.cycle === cycle
-      )
-      .sort(
-        (a, b) =>
-          new Date(b.start).getTime() - new Date(a.start).getTime()
-      )[0];
-
-    if (
-      existingWindow &&
-      !existingWindow.closed &&
-      new Date(existingWindow.end) > new Date()
-    ) {
-      return res.json(existingWindow);
-    }
-
-    const start = new Date();
-    const teacherPriorityEnd = new Date(start.getTime() + 30 * 60 * 1000);
-    const end = new Date(start.getTime() + 60 * 60 * 1000);
-
-    const generationWindow: WorksheetGenerationWindow = {
-      id: randomUUID(),
-      classId,
-      cycle,
-      schoolId: classObj.schoolId,
-      start: start.toISOString(),
-      teacherPriorityEnd: teacherPriorityEnd.toISOString(),
-      end: end.toISOString(),
-      generatedByRole: null,
-      generatedByEmail: null,
-      closed: false
-    };
-    await dbStore.addGenerationWindow(generationWindow);
-
-    return res.status(201).json(generationWindow);
-  });
-    app.get('/api/worksheets/generation-window', async (req, res) => {
-    const user = getAuthUser(req);
-    if (!user) return res.status(401).json({ error: 'Unauthorized' });
-
-    const { classId, cycle } = req.query;
-
-    if (!classId || !cycle) {
-      return res.status(400).json({
-        error: 'Class ID and assessment cycle are required.'
-      });
-    }
-
-    const classes = await dbStore.getClasses();
-    const classObj = classes.find(c => c.id === classId);
-
-    if (!classObj) {
-      return res.status(404).json({ error: 'Class not found.' });
-    }
-
-    if (user.role === UserRole.TEACHER || user.role === UserRole.SCHOOL) {
-      if (user.schoolId !== classObj.schoolId) {
-        return res.status(403).json({ error: 'Access denied.' });
-      }
-    }
-
-    const generationWindows = await dbStore.getGenerationWindows();
-
-    const generationWindow = generationWindows
-      .filter(
-        window => window.classId === classId && window.cycle === cycle
-    )
-    .sort(
-      (a, b) =>
-        new Date(b.start).getTime() - new Date(a.start).getTime()
-    )[0];
-
-    if (!generationWindow) {
-      return res.status(404).json({
-        error: 'No worksheet generation window found.'
-      });
-    }
-
-    return res.json(generationWindow);
-  });
-  app.post('/api/worksheets/generate', async (req, res) => {
-    const user = getAuthUser(req);
-    if (!user) return res.status(401).json({ error: 'Unauthorized' });
-
-    const { classId, cycle } = req.body;
-    if (!classId || !cycle) {
-      return res.status(400).json({ error: 'Class ID and assessment cycle are required.' });
-    }
-
-    const classes = await dbStore.getClasses();
-    const classObj = classes.find(c => c.id === classId);
-    if (!classObj) return res.status(404).json({ error: 'Class not found.' });
-
-    // Check if school is low or high strength
-    const schools = await dbStore.getSchools();
-    const school = schools.find(s => s.id === classObj.schoolId);
-    if (!school) return res.status(404).json({ error: 'School not found.' });
-            const generationWindows = await dbStore.getGenerationWindows();
-    const generationWindow = generationWindows
-      .filter(
-        window => window.classId === classId && window.cycle === cycle
-      )
-      .sort(
-        (a, b) =>
-          new Date(b.start).getTime() - new Date(a.start).getTime()
-      )[0];
-
-    if (!generationWindow) {
-      return res.status(409).json({
-        error: 'Worksheet generation window has not been started.'
-      });
-    }
-
-    const currentTime = new Date();
-
-    const windowStatus = getGenerationWindowStatus(
-      generationWindow,
-      user.role,
-      currentTime
-    );
-
-    if (windowStatus === 'expired') {
-      if (!generationWindow.closed) {
-        await dbStore.updateGenerationWindow(generationWindow.id, {
-          closed: true
+      if (!classId || !cycle) {
+        return res.status(400).json({
+          error: 'Class ID and assessment cycle are required.'
         });
       }
 
-      return res.status(410).json({
-        error: 'Worksheet generation window has expired.'
-      });
-    }
-
-    if (windowStatus === 'teacher-priority-ended') {
-      return res.status(403).json({
-        error: 'Teacher priority period has ended. School can now generate the worksheet.'
-      });
-    }
-
-    if (windowStatus === 'school-priority-not-started') {
-      return res.status(403).json({
-        error: 'Teacher priority period is still active.'
-      });
-    }
-
-    if (
-      user.role === UserRole.SCHOOL &&
-      currentTime < new Date(generationWindow.teacherPriorityEnd)
-    ) {
-      return res.status(403).json({
-        error: 'Teacher priority period is still active.'
-      });
-    }
-
-    // Check if Teacher is banned due to Delayed Attempts (§6.5)
-    if (user.role === UserRole.TEACHER && user.isBanned) {
-      return res.status(403).json({ error: 'Generation Denied: Teacher account is suspended/banned due to 3 Delayed Attempts within the academic year.' });
-    }
-
-    // Check if School is locked out entirely (§6.5)
-    if (school.isAccessLocked) {
-      if (user.role === UserRole.TEACHER || user.role === UserRole.SCHOOL) {
-        return res.status(403).json({ error: 'School Access Suspended: All teachers have defaulted. Management is reassigned to Block Admin / Volunteer.' });
+      if (!validCycles.includes(cycle)) {
+        return res.status(400).json({
+          error: 'Invalid assessment cycle.'
+        });
       }
-    }
 
-    // Check for Generation Lock (§13.2 R-11)
-    // The existing pairwise lock blocks DIFFERENT roles (Teacher↔School,
-    // Volunteer↔Block Admin). It does NOT block the same role from
-    // re-triggering — but that's the bug: a teacher who generated and
-    // printed 5 min ago can hit Generate again and overwrite their own
-    // paper. For Baseline / Mid-year / End-of-year cycles (per CLAUDE.md
-    // policy + SRS), one generation per (classId, cycle) is the rule.
-    // Remedial / Practice worksheets are NOT generated through this
-    // route; they go through /api/worksheets/generate-level-pdf.
-    const existingWorksheets = await dbStore.getWorksheets();
-    const conflicting = existingWorksheets.find(w => w.classId === classId && w.cycle === cycle);
-        if (conflicting && conflicting.locks.locked) {
-      return res.status(423).json({
-        error: 'Worksheet generation is already locked for this class and assessment cycle.',
-        lockedByRole: conflicting.generatedByRole,
-        lockedByEmail: conflicting.generatedByEmail
-      });
-    }
+      const classes = await dbStore.getClasses();
+      const classObj = classes.find(c => c.id === classId);
+      if (!classObj) return res.status(404).json({ error: 'Class not found.' });
+
+      if (user.role !== UserRole.TEACHER && user.role !== UserRole.SCHOOL) {
+        return res.status(403).json({
+          error: 'Only teachers or school users can start a worksheet generation window.'
+        });
+      }
+
+      if (user.schoolId !== classObj.schoolId) {
+        return res.status(403).json({ error: 'Access denied.' });
+      }
+
+      const existingWindows = await dbStore.getGenerationWindows();
+      const existingWindow = getLatestGenerationWindow(existingWindows, classId, cycle);
+
+      if (
+        existingWindow &&
+        !existingWindow.closed &&
+        new Date(existingWindow.end) > new Date()
+      ) {
+        return res.json(existingWindow);
+      }
+
+      const start = new Date();
+      const teacherPriorityEnd = new Date(start.getTime() + 30 * 60 * 1000);
+      const end = new Date(start.getTime() + 60 * 60 * 1000);
+
+      const generationWindow: WorksheetGenerationWindow = {
+        id: randomUUID(),
+        classId,
+        cycle,
+        schoolId: classObj.schoolId,
+        start: start.toISOString(),
+        teacherPriorityEnd: teacherPriorityEnd.toISOString(),
+        end: end.toISOString(),
+        generatedByRole: null,
+        generatedByEmail: null,
+        closed: false
+      };
+      await dbStore.addGenerationWindow(generationWindow);
+
+      return res.status(201).json(generationWindow);
+    });
+
+    app.get('/api/worksheets/generation-window', async (req, res) => {
+      const user = getAuthUser(req);
+      if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
+      const { classId, cycle } = req.query;
+
+      if (!classId || !cycle) {
+        return res.status(400).json({
+          error: 'Class ID and assessment cycle are required.'
+        });
+      }
+
+      const classes = await dbStore.getClasses();
+      const classObj = classes.find(c => c.id === classId);
+
+      if (!classObj) {
+        return res.status(404).json({ error: 'Class not found.' });
+      }
+
+      if (user.role === UserRole.TEACHER || user.role === UserRole.SCHOOL) {
+        if (user.schoolId !== classObj.schoolId) {
+          return res.status(403).json({ error: 'Access denied.' });
+        }
+      }
+
+      const generationWindows = await dbStore.getGenerationWindows();
+      const generationWindow = getLatestGenerationWindow(generationWindows, classId as string, cycle as string);
+
+      if (!generationWindow) {
+        return res.status(404).json({
+          error: 'No worksheet generation window found.'
+        });
+      }
+
+      return res.json(generationWindow);
+    });
+
+    app.post('/api/worksheets/generate', async (req, res) => {
+      const user = getAuthUser(req);
+      if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
+      const { classId, cycle } = req.body;
+      if (!classId || !cycle) {
+        return res.status(400).json({ error: 'Class ID and assessment cycle are required.' });
+      }
+
+      const classes = await dbStore.getClasses();
+      const classObj = classes.find(c => c.id === classId);
+      if (!classObj) return res.status(404).json({ error: 'Class not found.' });
+
+      // Check if school is low or high strength
+      const schools = await dbStore.getSchools();
+      const school = schools.find(s => s.id === classObj.schoolId);
+      if (!school) return res.status(404).json({ error: 'School not found.' });
+
+      const generationWindows = await dbStore.getGenerationWindows();
+      const generationWindow = getLatestGenerationWindow(generationWindows, classId, cycle);
+
+      if (!generationWindow) {
+        return res.status(409).json({
+          error: 'Worksheet generation window has not been started.'
+        });
+      }
+
+      const currentTime = new Date();
+
+      const windowStatus = getGenerationWindowStatus(
+        generationWindow,
+        user.role,
+        currentTime
+      );
+
+      if (windowStatus === 'expired') {
+        if (!generationWindow.closed) {
+          await dbStore.updateGenerationWindow(generationWindow.id, {
+            closed: true
+          });
+        }
+
+        return res.status(410).json({
+          error: 'Worksheet generation window has expired.'
+        });
+      }
+
+      if (windowStatus === 'teacher-priority-ended') {
+        return res.status(403).json({
+          error: 'Teacher priority period has ended. School can now generate the worksheet.'
+        });
+      }
+
+      if (windowStatus === 'school-priority-not-started') {
+        return res.status(403).json({
+          error: 'Teacher priority period is still active.'
+        });
+      }
+
+      if (
+        user.role === UserRole.SCHOOL &&
+        currentTime < new Date(generationWindow.teacherPriorityEnd)
+      ) {
+        return res.status(403).json({
+          error: 'Teacher priority period is still active.'
+        });
+      }
+
+      // Check if Teacher is banned due to Delayed Attempts (§6.5)
+      if (user.role === UserRole.TEACHER && user.isBanned) {
+        return res.status(403).json({ error: 'Generation Denied: Teacher account is suspended/banned due to 3 Delayed Attempts within the academic year.' });
+      }
+
+      // Check if School is locked out entirely (§6.5)
+      if (school.isAccessLocked) {
+        if (user.role === UserRole.TEACHER || user.role === UserRole.SCHOOL) {
+          return res.status(403).json({ error: 'School Access Suspended: All teachers have defaulted. Management is reassigned to Block Admin / Volunteer.' });
+        }
+      }
+
+      // Check for Generation Lock (§13.2 R-11)
+      // The existing pairwise lock blocks DIFFERENT roles (Teacher↔School,
+      // Volunteer↔Block Admin). It does NOT block the same role from
+      // re-triggering — but that's the bug: a teacher who generated and
+      // printed 5 min ago can hit Generate again and overwrite their own
+      // paper. For Baseline / Mid-year / End-of-year cycles (per CLAUDE.md
+      // policy + SRS), one generation per (classId, cycle) is the rule.
+      // Remedial / Practice worksheets are NOT generated through this
+      // route; they go through /api/worksheets/generate-level-pdf.
+      const existingWorksheets = await dbStore.getWorksheets();
+      const conflicting = existingWorksheets.find(w => w.classId === classId && w.cycle === cycle);
+      if (isWorksheetGenerationLocked(conflicting)) {
+        return res.status(423).json({
+          error: 'Worksheet generation is already locked for this class and assessment cycle.',
+          lockedByRole: conflicting!.generatedByRole,
+          lockedByEmail: conflicting!.generatedByEmail
+        });
+      }
     
 
     // Generate personalized questions for every student in the class
@@ -402,7 +389,7 @@ export function registerWorksheetRoutes(app: express.Express) {
 
     for (const student of classStudents) {
       const subLvl = student.currentSubLevel || 0;
-      const qs = generateQuestionsForLevel(student.currentLevel, subLvl);
+      const qs = await generateQuestionsForLevel(student.currentLevel, subLvl);
       // Map question IDs to be student-specific to prevent duplicate collisions
       qs.forEach(q => {
         compiledQuestions.push({
@@ -542,6 +529,110 @@ export function registerWorksheetRoutes(app: express.Express) {
     } catch (err: any) {
       console.error('Worksheet PDF generation failed:', err);
       res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Issue #601: a worksheet for a chosen set of concepts. Content comes from the
+  // concepts' approved templates (resolveWorksheetContent, #600) and is printed
+  // by renderConceptWorksheet (#602). Nothing is saved: the same request gives
+  // the same sheet again.
+  const CONCEPT_BATCH_ROLES = new Set<UserRole>([UserRole.SUPERADMIN, UserRole.SCHOOL, UserRole.TEACHER, UserRole.VOLUNTEER]);
+  const MAX_QUESTIONS_PER_BATCH = 200;
+
+  // The fixed question count and level scope of each paper type (#593). Any
+  // signed-in user may read it; it holds no student data.
+  app.get('/api/paper-types/config', (req, res) => {
+    if (!getAuthUser(req)) return res.status(401).json({ error: 'Unauthorized' });
+    res.json({ paperTypes: Object.values(PAPER_TYPE_CONFIG) });
+  });
+
+  app.get('/api/paper-types/:type/config', (req, res) => {
+    if (!getAuthUser(req)) return res.status(401).json({ error: 'Unauthorized' });
+    const config = getPaperTypeConfig(req.params.type);
+    if (!config) return res.status(404).json({ error: `Unknown paper type. Use one of: ${Object.keys(PAPER_TYPE_CONFIG).join(', ')}.` });
+    res.json(config);
+  });
+
+  app.post('/api/worksheets/generate-concept-batch', async (req, res) => {
+    const user = getAuthUser(req);
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    if (!CONCEPT_BATCH_ROLES.has(user.role)) {
+      return res.status(403).json({ error: 'Only a teacher, volunteer, principal or superadmin can create a concept worksheet.' });
+    }
+
+    const { conceptIds, className, section, seed, paperType } = req.body ?? {};
+    let questionsPerConcept = req.body?.questionsPerConcept;
+    // A paper type fixes the total number of questions (#593); the route
+    // spreads it over the chosen concepts, so the caller need not send a count.
+    let paperTypeConfig: ReturnType<typeof getPaperTypeConfig>;
+    let countsByConcept: Record<string, number> | undefined;
+    if (paperType !== undefined) {
+      paperTypeConfig = typeof paperType === 'string' ? getPaperTypeConfig(paperType) : undefined;
+      if (!paperTypeConfig) {
+        return res.status(400).json({ error: `Unknown paperType. Use one of: ${Object.keys(PAPER_TYPE_CONFIG).join(', ')}.` });
+      }
+      const ids = Array.isArray(conceptIds) ? [...new Set(conceptIds.map((c: unknown) => String(c).trim()))] : [];
+      if (ids.length === 0 || ids.length > paperTypeConfig.questionCount) {
+        return res.status(400).json({ error: `A ${paperTypeConfig.paperType} paper needs between 1 and ${paperTypeConfig.questionCount} different concepts.` });
+      }
+      const counts = spreadQuestionCount(paperTypeConfig.questionCount, ids.length);
+      countsByConcept = Object.fromEntries(ids.map((id, i) => [id, counts[i]]));
+      questionsPerConcept = Math.max(...counts);
+    }
+    const classNameText = typeof className === 'string' ? className.trim() : '';
+    const sectionText = typeof section === 'string' ? section.trim() : '';
+    if (!classNameText || classNameText.length > 40 || !sectionText || sectionText.length > 10) {
+      return res.status(400).json({ error: 'className (up to 40 characters) and section (up to 10 characters) are required.' });
+    }
+    if (seed !== undefined && (typeof seed !== 'string' || seed.length === 0 || seed.length > 60)) {
+      return res.status(400).json({ error: 'seed must be a text of 1 to 60 characters.' });
+    }
+
+    let content;
+    try {
+      const { resolveWorksheetContent } = await import('../services/worksheetContent');
+      const distinct = Array.isArray(conceptIds) ? new Set(conceptIds.map(c => String(c).trim())).size : 0;
+      if (!paperTypeConfig && Number.isInteger(questionsPerConcept) && distinct * questionsPerConcept > MAX_QUESTIONS_PER_BATCH) {
+        return res.status(400).json({ error: `A concept worksheet can hold at most ${MAX_QUESTIONS_PER_BATCH} questions.` });
+      }
+      content = await resolveWorksheetContent(conceptIds, questionsPerConcept, { ...(seed ? { seed } : {}), ...(countsByConcept ? { countsByConcept } : {}) });
+    } catch (err: any) {
+      if (err instanceof RangeError) return res.status(400).json({ error: err.message });
+      console.error('Concept worksheet content failed:', err);
+      return res.status(500).json({ success: false, error: 'Could not prepare the worksheet content.' });
+    }
+
+    const summary = content.concepts.map(c => ({
+      conceptId: c.conceptId, level: getLevelForConcept(c.conceptId)?.levelNumber ?? null,
+      requested: c.requested, produced: c.questions.length, shortfall: c.shortfall ?? null,
+    }));
+    if (content.questions.length === 0) {
+      return res.status(404).json({
+        error: 'None of the chosen concepts has an approved question that can be printed.',
+        concepts: summary,
+      });
+    }
+
+    try {
+      const { renderConceptWorksheet } = await import('../paperGenerator');
+      const result = await renderConceptWorksheet({
+        worksheetId: `CW_${randomUUID().slice(0, 8)}`,
+        className: classNameText,
+        section: sectionText,
+        conceptIds: content.concepts.map(c => c.conceptId),
+        resolvedQuestions: content.questions,
+      });
+      res.json({
+        success: true, pdfUrl: result.pdfUrl, questionCount: content.questions.length, concepts: summary,
+        ...(paperTypeConfig ? {
+          paperType: paperTypeConfig.paperType,
+          expectedQuestionCount: paperTypeConfig.questionCount,
+          complete: content.questions.length === paperTypeConfig.questionCount,
+        } : {}),
+      });
+    } catch (err: any) {
+      console.error('Concept worksheet PDF failed:', err);
+      res.status(500).json({ success: false, error: 'Could not create the worksheet PDF.' });
     }
   });
 

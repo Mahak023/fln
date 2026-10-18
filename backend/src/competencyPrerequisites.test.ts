@@ -22,10 +22,11 @@
  * Pure functions only - no DB, no network.
  */
 import assert from 'node:assert';
-import { getLevelForConcept } from './config/curriculumMap';
+import { getLevelForConcept, getConceptForLevel } from './config/curriculumMap';
 import {
   CONCEPT_PREREQUISITE_GROUP_OVERRIDES,
   CONCEPT_PREREQUISITES,
+  apexConcepts,
   directPrerequisites,
   effectiveHardPrerequisiteGroups,
   isPrerequisiteSatisfied,
@@ -281,6 +282,27 @@ test('resolvePrerequisites() does not repeat a concept reachable by two routes',
   assert.ok(chain.includes('S5.2'), 'expected S5.2 in the transitive chain');
   assert.strictEqual(chain.filter(id => id === 'S5.2').length, 1);
   assert.strictEqual(new Set(chain).size, chain.length);
+});
+
+test('apexConcepts() keeps only concepts that nothing else in the group builds on', () => {
+  // S7.3 needs S6.5 (and through it S5.4, S5.2 ...), so only S7.3 is apex here.
+  assert.deepStrictEqual(apexConcepts(['S7.3', 'S6.5', 'S5.4', 'S5.2']), ['S7.3']);
+  // Two concepts with no edge between them are both apex.
+  assert.deepStrictEqual(apexConcepts(['S1.1', 'S1.2']), ['S1.1', 'S1.2']);
+});
+
+test('apexConcepts() ignores unknown ids and repeats', () => {
+  assert.deepStrictEqual(apexConcepts(['S9.99', 'S1.1', 'S1.1']), ['S1.1']);
+  assert.deepStrictEqual(apexConcepts([]), []);
+});
+
+test('apex sizes to each grade over the current graph (the Part 4b table)', () => {
+  const upTo = (hi: number) => {
+    const ids: string[] = [];
+    for (let l = 1; l <= hi; l++) { const c = getConceptForLevel(l); if (c) ids.push(c.conceptId); }
+    return apexConcepts(ids).length;
+  };
+  assert.deepStrictEqual([46, 60, 77, 91, 109].map(upTo), [28, 29, 31, 31, 38]);
 });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

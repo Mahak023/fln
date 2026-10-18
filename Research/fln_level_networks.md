@@ -25,6 +25,8 @@ This is a genuine count from decomposing the research, not a target to hit — i
 
 **2026-09-17: the year before Class 1 is being finalised as its own stage**, the first of a stage-by-stage build that stops at Class 3. The table above does not include those changes yet: 15 proposed new nodes, 4 nodes moving into this stage and 2 widened definitions. They are recorded in **Part 2b** and in `fln_year_before_class1.md`, and join the chain tables once the dev team registers the new ids.
 
+**Part 3's worked diagnostic example, below, is a frozen historical example (FLN #468).** It is not the current blueprint; the apex sizes in Part 4b are.
+
 **Note on Part 3's worked diagnostic example, below:** it predates the 2026-07-19 Stage 2/3 additions and has not yet been recomputed to include the new nodes (S2.10, S3.10) — flagged at the point it appears rather than silently left inconsistent.
 
 ---
@@ -382,6 +384,18 @@ Apex selection uses only → edges, so demoting 11 removes inference paths and m
 
 The reduction against testing every level is still substantial (Class 1: 22 questions instead of 42), but the papers are now **17–27% longer** than the earlier figures. Those earlier numbers assumed 11 prerequisites this document could not justify.
 
+**Recomputed 2026-10-12 (FLN #468).** The table above is kept as the record of the 2026-08-21 reconciliation; its numbers are superseded. Apex sets are now derived in code, `apexConcepts()` in `backend/src/competencyPrerequisites.ts`, over the current hard-edge table and the 109-level registry (cumulative: every level from L1 to the end of the grade, since a child's earlier levels still have to be covered). A test pins the figures, so a change to an edge changes them visibly:
+
+| Grade | Levels up to | Concepts | Apex now |
+|---|---|---|---|
+| Bal Vatika | L46 | 46 | **28** |
+| Class 1 | L60 | 60 | **29** |
+| Class 2 | L77 | 77 | **31** |
+| Class 3 | L91 | 91 | **31** |
+| Class 4 | L109 | 109 | **38** |
+
+The older "Apex before / now" columns counted a different level model (93 levels, before the Stage 3 additions) and a different edge set, so the two tables are not comparable row for row. The "17-27% longer" claim above was computed from the old columns and should not be quoted.
+
 **A standing rule this establishes: an edge with no recorded rationale should not be typed `→`.** 28 of the current 67 hard edges still carry no note — see Part 4.
 
 ---
@@ -424,7 +438,7 @@ Part 4b's reconciliation covered edges present in *both* graphs. Separately, the
 
 **Edge types after this adjudication: 91 prereq (→), 35 sequence (⇢), 6 parallel (∥) = 132** (Part 4b's 104 named-graph edges, plus 28 newly-adjudicated code-only edges: 24 promoted to →, 4 already ⇢).
 
-Apex-set sizes were not recomputed against this addition — Part 4b's table above predates it. Whoever next touches apex selection should treat those numbers as stale pending a recompute over the fuller edge set.
+Apex-set sizes were recomputed on 2026-10-12 (see Part 4b, "Recomputed"); they are now derived in code by `apexConcepts()` rather than kept as a table.
 
 ---
 

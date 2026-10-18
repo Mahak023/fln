@@ -26,3 +26,26 @@ export function getGenerationWindowStatus(
 
   return 'active';
 }
+
+export function getLatestGenerationWindow(
+  windows: WorksheetGenerationWindow[],
+  classId?: string,
+  cycle?: string
+): WorksheetGenerationWindow | undefined {
+  return windows
+    .filter(
+      window =>
+        (!classId || window.classId === classId) &&
+        (!cycle || window.cycle === cycle)
+    )
+    .sort(
+      (a, b) =>
+        new Date(b.start).getTime() - new Date(a.start).getTime()
+    )[0];
+}
+
+export function isWorksheetGenerationLocked(
+  worksheet?: { locks?: { locked: boolean } } | null
+): boolean {
+  return Boolean(worksheet && worksheet.locks?.locked);
+}

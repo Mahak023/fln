@@ -53,7 +53,7 @@ export function registerCertificationRoutes(app: express.Express) {
     const students = await dbStore.getStudents();
     const student = students.find(s => s.id === cert.studentId);
     if (!student) return res.status(404).json({ error: 'Student not found for certification.' });
-    if (!canAccessStudent(user, student)) {
+    if (!(await canAccessStudent(user, student))) {
       return res.status(403).json({ error: 'Forbidden: student outside your scope.' });
     }
 
@@ -134,7 +134,7 @@ export function registerCertificationRoutes(app: express.Express) {
       const students = await dbStore.getStudents();
       const student = students.find(s => s.id === studentId);
       if (!student) return res.status(404).json({ error: 'Student not found.' });
-      if (!canAccessStudent(user, student)) {
+      if (!(await canAccessStudent(user, student))) {
         return res.status(403).json({ error: 'Forbidden: student outside your scope.' });
       }
       const all = await dbStore.getCertifications();

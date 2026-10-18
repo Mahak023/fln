@@ -2,10 +2,25 @@ import { apiFetch } from '../services/apiClient';
 import React, { useState, useEffect } from 'react';
 import { LogEntry, UserRole, User, School } from '../types';
 import { Download, Search, SlidersHorizontal } from 'lucide-react';
+import { buildCsv, downloadCsv } from '../utils/csv';
 
 interface LogbookViewProps {
   token: string;
   user?: User | null;
+}
+
+export function extractLogbookRows(logs: LogEntry[]): (string | number)[][] {
+  return logs.map(l => [
+    new Date(l.timestamp).toISOString(),
+    l.id,
+    l.userEmail,
+    l.userRole,
+    l.schoolId || 'National',
+    l.schoolName || 'National Framework',
+    l.activityType,
+    l.status,
+    l.details,
+  ]);
 }
 
 export const LogbookView: React.FC<LogbookViewProps> = ({ token, user }) => {
@@ -123,29 +138,8 @@ export const LogbookView: React.FC<LogbookViewProps> = ({ token, user }) => {
     if (filteredLogs.length === 0) return;
     
     const headers = ['Timestamp', 'Log ID', 'User Email', 'User Role', 'Location School ID', 'Location School Name', 'Activity', 'Status', 'Details'];
-    
-    const rows = filteredLogs.map(l => [
-      new Date(l.timestamp).toISOString(),
-      l.id,
-      l.userEmail,
-      l.userRole,
-      l.schoolId || 'National',
-      l.schoolName || 'National Framework',
-      l.activityType,
-      l.status,
-      `"${l.details.replace(/"/g, '""')}"`
-    ]);
-    
-    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
-    
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', `FLN_System_Logbook_Export_${new Date().toISOString().split('T')[0]}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    const rows = extractLogbookRows(filteredLogs);
+    downloadCsv(`FLN_System_Logbook_Export_${new Date().toISOString().split('T')[0]}.csv`, buildCsv(headers, rows));
   };
 
   // Check locks for selectors based on user roles

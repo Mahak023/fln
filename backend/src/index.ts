@@ -46,6 +46,7 @@ import { registerCertificationRoutes } from './routes/certification';
 import { registerMisconceptionRoutes } from './routes/misconceptions';
 import { registerCurriculumRoutes } from './routes/curriculum';
 import { registerQuestionBankRoutes } from './routes/questionBank';
+import { registerErrorTagsRoutes } from './routes/errorTags';
 import { registerObservationRoutes } from './routes/observations';
 import { randomUUID } from 'crypto';
 import fs from 'fs';
@@ -176,6 +177,32 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
+/**
+ * Validate Aadhaar Vault configuration and emit startup warnings for missing settings.
+ * Does not terminate the server, avoiding unexpected startup crashes while ensuring
+ * operators are aware of missing configuration before student registration is attempted.
+ */
+export function checkVaultConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  logger: { warn: (msg: string) => void } = console,
+): string[] {
+  const warnings: string[] = [];
+
+  if (!env.LOCAL_DEV_MASTER_KEY || !env.LOCAL_DEV_MASTER_KEY.trim()) {
+    const msg = '[vault] Missing LOCAL_DEV_MASTER_KEY: student registration and bulk import will fail.';
+    warnings.push(msg);
+    logger.warn(msg);
+  }
+
+  if (env.NODE_ENV === 'production' && env.VAULT_ALLOW_UNSAFE_KEY_PROVIDER !== 'true') {
+    const msg = '[vault] Production mode requires VAULT_ALLOW_UNSAFE_KEY_PROVIDER=true when using local key provider.';
+    warnings.push(msg);
+    logger.warn(msg);
+  }
+
+  return warnings;
+}
+
 async function startServer() {
   // Connect to MongoDB — connectDB() has its own internal 3-attempt
   // retry and falls back to a local file DB if all attempts fail. Wrap
@@ -189,6 +216,9 @@ async function startServer() {
 
   // Initialize file-based DB
   await dbStore.init();
+
+  // Validate Aadhaar Vault configuration at startup
+  checkVaultConfig();
 
   // Validate the prerequisite graph once at startup. The graph is a static,
   // compiled-in table, so any unknown conceptId or cycle in it is a build
@@ -263,6 +293,7 @@ registerStatsRoutes(app);
   registerMisconceptionRoutes(app);
   registerCurriculumRoutes(app);
   registerQuestionBankRoutes(app);
+  registerErrorTagsRoutes(app);
   registerObservationRoutes(app);
 
   // --- Intervention Tracking & Best Practices Repository ---
@@ -319,4 +350,13 @@ registerStatsRoutes(app);
   process.on('SIGINT', () => { void gracefulShutdown('SIGINT', server); });
 }
 
-startServer();
+export { startServer };
+
+const isDirectRun =
+  Boolean(process.argv[1]) &&
+  path.resolve(process.argv[1]).toLowerCase() ===
+    path.resolve(fileURLToPath(import.meta.url)).toLowerCase();
+
+if (isDirectRun) {
+  startServer();
+}

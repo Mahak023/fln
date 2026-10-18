@@ -15,6 +15,8 @@ import { CURRICULUM_MAPPING } from '../config/curriculumMap';
 import { directPrerequisites, describeConcept } from '../competencyPrerequisites';
 import { analyzeScanQuality } from '../scanQuality';
 import { calculateStandardAdvancement } from '../gradeLevelCalculator';
+import { computeRootCauseAnalysis } from '../rootCauseAnalysis';
+import { matchesChoiceLetter } from '../answerMatching';
 
 export function registerEvaluationRoutes(app: express.Express) {
 
@@ -1074,8 +1076,18 @@ export function registerEvaluationRoutes(app: express.Express) {
         question: q.question,
         correctAnswer: q.answer,
         submittedAnswer: answers[q.question_id] || '',
-        isCorrect: (answers[q.question_id] || '').trim().toLowerCase() === q.answer.trim().toLowerCase(),
+        isCorrect: (answers[q.question_id] || '').trim().toLowerCase() === q.answer.trim().toLowerCase()
+          || matchesChoiceLetter(answers[q.question_id], q),
       })),
+      // #402: this path never set rootCauses before, unlike the diagnostic
+      // path — the same gap the override handler had, just one step
+      // earlier. computeRootCauseAnalysis is the exact logic the diagnostic
+      // path already uses; ({}) for evalData because nothing wires a real
+      // pipeline verdict in yet (#458), same as that path's own call.
+      // Deliberately only taking rootCauses here, not the function's other
+      // fields (levelsFailed/prerequisitesToCheck/performanceByDifficulty)
+      // — out of scope for #402, which only asks about rootCauses.
+      rootCauses: computeRootCauseAnalysis({}, studentQuestions, answers).rootCauses,
     };
 
     await dbStore.addEvaluationReport(report);
@@ -1252,7 +1264,7 @@ export function registerEvaluationRoutes(app: express.Express) {
 
     const student = await dbStore.getStudentById(req.params.studentId);
     if (!student) return res.status(404).json({ error: 'Student not found.' });
-    if (!canAccessStudent(user, student)) return res.status(403).json({ error: 'Forbidden.' });
+    if (!(await canAccessStudent(user, student))) return res.status(403).json({ error: 'Forbidden.' });
 
     const reps = await dbStore.getEvaluationReports({ studentIds: [req.params.studentId] });
     // Sort newest first so the UI's "most recent placement" view shows
@@ -1271,7 +1283,7 @@ export function registerEvaluationRoutes(app: express.Express) {
 
     const student = await dbStore.getStudentById(req.params.studentId);
     if (!student) return res.status(404).json({ error: 'Student not found.' });
-    if (!canAccessStudent(user, student)) return res.status(403).json({ error: 'Forbidden.' });
+    if (!(await canAccessStudent(user, student))) return res.status(403).json({ error: 'Forbidden.' });
 
     const reps = await dbStore.getEvaluationReports({ studentIds: [req.params.studentId] });
     const diagnosticReports = reps.filter(r => r.worksheetId === 'diagnostic');
@@ -1296,7 +1308,7 @@ export function registerEvaluationRoutes(app: express.Express) {
 
     const student = await dbStore.getStudentById(report.studentId);
     if (!student) return res.status(404).json({ error: 'Student not found.' });
-    if (!canAccessStudent(user, student)) return res.status(403).json({ error: 'Forbidden.' });
+    if (!(await canAccessStudent(user, student))) return res.status(403).json({ error: 'Forbidden.' });
 
     if (!report.questionResults || report.questionResults.length === 0) {
       return res.status(400).json({
@@ -1332,6 +1344,30 @@ export function registerEvaluationRoutes(app: express.Express) {
     const totalQuestions = updatedQuestionResults.length;
     const percentage = Math.round((newScore / totalQuestions) * 100);
 
+    // #402: recompute rootCauses from the corrected answers, same logic as
+    // the original submission path (computeRootCauseAnalysis). Needs the
+    // real Question objects (topic/source_level aren't on questionResults),
+    // so the worksheet has to be fetched here rather than working from
+    // questionResults alone. Best-effort: a report making it this far always
+    // has questionResults (checked above), so this only fails if the
+    // worksheet itself is gone — in which case rootCauses is left as
+    // whatever it already was rather than failing the whole override, same
+    // as assignStudentToArchetype's try/catch just below.
+    let updatedRootCauses: EvaluationReport['rootCauses'] | undefined;
+    try {
+      const worksheets = await dbStore.getWorksheets();
+      const ws = worksheets.find(w => w.id === report.worksheetId);
+      if (ws) {
+        const stillWrongIds = new Set(updatedQuestionResults.filter(q => !q.isCorrect).map(q => q.questionId));
+        const matchedQuestions = ws.questions.filter(q => stillWrongIds.has(q.question_id));
+        const answersForAnalysis: { [questionId: string]: string } = {};
+        for (const q of updatedQuestionResults) answersForAnalysis[q.questionId] = q.submittedAnswer;
+        updatedRootCauses = computeRootCauseAnalysis({}, matchedQuestions, answersForAnalysis).rootCauses ?? [];
+      }
+    } catch (error) {
+      console.error('[override] Failed to recompute rootCauses after correction:', error);
+    }
+
     // Re-derive recommendedLevel/subLevel using the same score%-based mapping
     // already established elsewhere in this file for ICR-scanned diagnostics
     // (see the /api/icr/evaluate-file handler above) — reused here rather
@@ -1351,7 +1387,25 @@ export function registerEvaluationRoutes(app: express.Express) {
       teacherReviewed: true,
       reviewedBy: user.email,
       reviewedAt: new Date().toISOString(),
+      // #402: only overwrite if recomputation actually succeeded, so a
+      // worksheet-lookup failure can't wipe out a previously-good value.
+      ...(updatedRootCauses !== undefined ? { rootCauses: updatedRootCauses } : {}),
     });
+
+    // #402: an override changes what the misconception fingerprint and
+    // archetype were computed from, so both need to catch up — same call
+    // sequence already used on the original (non-override) submission path
+    // just above in this file, at the addAnswerSubmission/addEvaluationReport
+    // calls. invalidateFingerprintCache() is a cheap global cache clear, not
+    // a cohort re-cluster; assignStudentToArchetype() only recomputes this
+    // one student. Reusing that existing pattern here rather than inventing
+    // a different one for the override path.
+    invalidateFingerprintCache();
+    try {
+      await assignStudentToArchetype(student.id);
+    } catch (error) {
+      console.error('[archetype] Failed to reassign student to misconception archetype after override:', error);
+    }
 
     // Only touch the student's placement if the correction actually changed
     // the outcome. Assumes the most recent levelHistory entry is the one

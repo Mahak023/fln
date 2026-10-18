@@ -3,6 +3,7 @@
 import type { UserRole } from './identity.types';
 import type { Question, CycleName } from './curriculum.types';
 import type { ScanQualityResult } from './scanQuality';
+import type { ErrorType } from './errorClassification';
 
 export interface LevelWorksheet {
   id: string;
@@ -179,4 +180,48 @@ export interface TeacherObservationRecord {
   observedAt: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface AttemptRecord {
+  id: string;
+  studentId: string;
+  questionId: string;
+  /** The worksheet/session this attempt belongs to, when one exists -- optional for the same reason `AnswerSubmission.questions` is: a live practice session may not be tied to a persisted Worksheet. */
+  worksheetId?: string;
+
+  answer: string;
+  isCorrect: boolean;
+  /** Seconds spent on this question, when the capture path can measure it. Optional: not every path can. */
+  timeTakenSeconds?: number;
+
+  hintsUsed: number;
+  attemptsBeforeSuccess: number;
+  /**
+   * 0 Independent · 1 Procedural prompt ("What operation do you need?") ·
+   * 2 Strategic prompt ("Can you first separate the tens and ones?") ·
+   * 3 Worked/example support · 4 Direct assistance (system guides step by
+   * step). A closed 0-4 scale, not free text, per #479's acceptance
+   * criteria. An `independenceScore`, if wanted downstream, is meant to be
+   * DERIVED from this + `attemptsBeforeSuccess` + `hintsUsed` -- not stored
+   * as its own separate field.
+   */
+  scaffoldingLevel: 0 | 1 | 2 | 3 | 4;
+  /** How the question was presented/answered (e.g. 'numeric', 'visual', 'verbal'). Left as an open string -- the architecture discussion names this field but, unlike scaffoldingLevel, doesn't define a closed vocabulary for it. */
+  representation?: string;
+
+  /**
+   * Required, not optional (#479 acceptance criteria) -- this is the join
+   * key to #459. Uses #459's own `ErrorType` values (unanswered,
+   * digit_reversal, decimal_place_shift, off_by_one, unclassified) so this
+   * actually joins to that data instead of drifting into a different
+   * vocabulary -- `EvaluationReport.rootCauses`' conceptual/careless/
+   * prerequisite categories are a different classification, not this one.
+   * 'none' is the one addition: it covers a fully correct attempt, which
+   * has no error to classify and isn't a value #459 itself produces.
+   */
+  errorType: ErrorType | 'none';
+
+  recordedAt: string;
+  /** teacherId/volunteerId who captured this attempt. */
+  recordedBy: string;
 }

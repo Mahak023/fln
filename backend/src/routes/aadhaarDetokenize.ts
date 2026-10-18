@@ -117,7 +117,7 @@ async function authorizeAndResolveStudent(
     return null;
   }
   // IDOR-safe: admin can only act on students within their scope.
-  if (!canAccessStudent(user, student)) {
+  if (!(await canAccessStudent(user, student))) {
     // Deliberately not "student not found" — that would mask the IDOR
     // surface. The admin already knows the id exists; telling them they
     // can't act on it is the intended UX.

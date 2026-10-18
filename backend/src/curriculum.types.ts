@@ -230,6 +230,8 @@ export interface QuestionTemplate {
   /** Soft delete: a generated paper may already cite this id, so the row stays for audit. */
   deletedAt: string | null;
   deletedBy: string | null;
+  status?: QuestionTemplateStatus;
+  errorTag?: string;
 }
 
 /**
@@ -341,4 +343,8 @@ export interface CurriculumLevel {
   createdAt: string;
   updatedAt: string;
 }
+
+export const QUESTION_TEMPLATE_STATUSES = ['draft', 'pendingApproval', 'approved', 'rejected'] as const;
+export type QuestionTemplateStatus = (typeof QUESTION_TEMPLATE_STATUSES)[number];
+
 

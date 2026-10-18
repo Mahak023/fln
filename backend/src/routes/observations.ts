@@ -2,6 +2,7 @@ import express from 'express';
 import { randomUUID } from 'crypto';
 import { dbStore, CYCLE_NAMES, TeacherObservationRecord, UserRole } from '../db';
 import { canAccessStudent, getAuthUser } from '../auth';
+import { getLevelForConcept } from '../config/curriculumMap';
 
 const OBSERVATION_RATINGS = ['Proficient', 'Progressive', 'Beginner'] as const;
 
@@ -25,7 +26,7 @@ export function registerObservationRoutes(app: express.Express) {
     try {
       const student = (await dbStore.getStudents()).find(s => s.id === req.params.studentId);
       if (!student) return res.status(404).json({ error: 'Student not found.' });
-      if (!canAccessStudent(user, student)) return res.status(403).json({ error: 'Forbidden.' });
+      if (!(await canAccessStudent(user, student))) return res.status(403).json({ error: 'Forbidden.' });
 
       return res.json(await dbStore.getObservationRecordsForStudent(student.id, cycle));
     } catch (error: any) {
@@ -85,10 +86,15 @@ export function registerObservationRoutes(app: express.Express) {
       });
     }
 
+    const concept = conceptId.trim();
+    if (concept.length > 20 || !getLevelForConcept(concept)) {
+      return res.status(400).json({ error: 'Unknown conceptId.' });
+    }
+
     try {
       const student = (await dbStore.getStudents()).find(s => s.id === studentId.trim());
       if (!student) return res.status(404).json({ error: 'Student not found.' });
-      if (!canAccessStudent(user, student)) return res.status(403).json({ error: 'Forbidden.' });
+      if (!(await canAccessStudent(user, student))) return res.status(403).json({ error: 'Forbidden.' });
 
       const classGroup = (await dbStore.getClasses()).find(c => c.id === classId.trim());
       if (!classGroup) return res.status(404).json({ error: 'Class not found.' });
@@ -101,12 +107,12 @@ export function registerObservationRoutes(app: express.Express) {
       }
 
       const existing = await dbStore.getObservationRecordsForStudent(student.id, cycle);
-      const priorRecord = existing.find(record => record.conceptId === conceptId.trim());
+      const priorRecord = existing.find(record => record.conceptId === concept);
       const now = new Date().toISOString();
       const record: TeacherObservationRecord = {
         id: priorRecord?.id ?? `obs_${randomUUID()}`,
         studentId: student.id,
-        conceptId: conceptId.trim(),
+        conceptId: concept,
         teacherId: user.id,
         teacherEmail: user.email,
         schoolId: student.schoolId,

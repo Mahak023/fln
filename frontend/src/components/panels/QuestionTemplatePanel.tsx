@@ -9,6 +9,12 @@ import type {
   ParamCatalog,
   ImportResult,
 } from '../../types';
+import {
+  QUESTION_FAMILIES,
+  QUESTION_FAMILY_LABELS,
+  isQuestionFamily,
+  type QuestionFamily,
+} from '../../utils/questionFamily';
 
 const MAX_INTENT_CHARS = 2000;
 
@@ -53,12 +59,15 @@ export const QuestionTemplatePanel: React.FC = () => {
   const [skills, setSkills] = useState<string[]>([]);
   const [subskills, setSubskills] = useState<string[]>([]);
   const [generationIntent, setGenerationIntent] = useState('');
-  const [questionFamily, setQuestionFamily] = useState<'counting' | 'operation'>('operation');
+  const [questionFamily, setQuestionFamily] = useState<QuestionFamily>('operation');
   const [assessmentMode, setAssessmentMode] = useState<'written' | 'observed' | 'both'>('written');
   const [svgThemeIds, setSvgThemeIds] = useState<string[]>([]);
   const [params, setParams] = useState<QuestionTemplateParams>(EMPTY_PARAMS);
   const [name, setName] = useState('');
   const [tagsText, setTagsText] = useState('');
+  const [errorTag, setErrorTag] = useState('');
+  const [errorTagTopic, setErrorTagTopic] = useState('counting');
+  const [errorTagOptions, setErrorTagOptions] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -70,6 +79,8 @@ export const QuestionTemplatePanel: React.FC = () => {
 
   // CSV import
   const [showImport, setShowImport] = useState(false);
+  const [templateStage, setTemplateStage] = useState('');
+  const selectedTemplateStage = levelMap?.stages?.find(stage => stage.stage === templateStage);
   const [csvText, setCsvText] = useState('');
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
   const [importing, setImporting] = useState(false);
@@ -117,6 +128,23 @@ export const QuestionTemplatePanel: React.FC = () => {
     return () => clearTimeout(t);
   }, [toast]);
 
+  useEffect(() => {
+    if (!errorTagTopic) {
+      setErrorTagOptions([]);
+      return;
+    }
+    let cancelled = false;
+    apiFetch(`/api/error-tags?topic=${encodeURIComponent(errorTagTopic)}`)
+      .then(res => (res.ok ? res.json() : null))
+      .then(data => {
+        if (!cancelled && data?.tags) {
+          setErrorTagOptions(data.tags);
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [errorTagTopic]);
+
   const selectedLevel = useMemo(
     () => (level === '' ? undefined : levelMap?.levels.find(l => l.levelNumber === level)),
     [level, levelMap]
@@ -144,8 +172,8 @@ export const QuestionTemplatePanel: React.FC = () => {
   const isFillBlanks = params.answerType === 'fill-blanks';
   const isNumberFamily = questionFamily === 'operation' || questionFamily === 'counting';
 
-  const handleQuestionFamilyChange = (nextFamily: string) => {
-    setQuestionFamily(nextFamily as any);
+  const handleQuestionFamilyChange = (nextFamily: QuestionFamily) => {
+    setQuestionFamily(nextFamily);
     setFormError(null);
     const isNum = nextFamily === 'operation' || nextFamily === 'counting';
     if (!isNum) {
@@ -232,6 +260,7 @@ export const QuestionTemplatePanel: React.FC = () => {
     setParams(EMPTY_PARAMS);
     setName('');
     setTagsText('');
+    setErrorTag('');
     setFormError(null);
     setDuplicateWarning(null);
   };
@@ -260,6 +289,7 @@ export const QuestionTemplatePanel: React.FC = () => {
     });
     setName(t.name);
     setTagsText(t.tags.join(', '));
+    setErrorTag(t.errorTag ?? '');
     setFormError(null);
     setDuplicateWarning(null);
     setOpenGroup({ numbers: true, operations: true, answer: true, subject: true });
@@ -291,6 +321,8 @@ export const QuestionTemplatePanel: React.FC = () => {
         ...params,
         name: name.trim(),
         tags: tagsText.split(',').map(s => s.trim()).filter(Boolean),
+        errorTag: errorTag || undefined,
+        topic: errorTagTopic || undefined,
       };
 
       const res = editingId
@@ -380,12 +412,14 @@ export const QuestionTemplatePanel: React.FC = () => {
    */
   const downloadCsvTemplate = async () => {
     try {
-      const res = await apiFetch('/api/question-templates/csv-template.zip');
+      const res = await apiFetch('/api/question-templates/csv-template.zip'
+        + (templateStage ? '?stage=' + encodeURIComponent(templateStage) : ''));
       if (!res.ok) { setToast('Could not download the template and references.'); return; }
       const url = URL.createObjectURL(await res.blob());
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'question-authoring-template.zip';
+      const slug = selectedTemplateStage ? '-' + selectedTemplateStage.label.toLowerCase().replace(/\s+/g, '-') : '';
+      a.download = `question-authoring-template${slug}.zip`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -615,10 +649,10 @@ export const QuestionTemplatePanel: React.FC = () => {
               <div>
                 <div className={labelCls}>Kind of question</div>
                 <div className="mt-1 flex flex-wrap gap-2">
-                  {(catalog?.questionFamily ?? ['counting', 'operation']).map(f => (
+                  {(catalog?.questionFamily?.filter(isQuestionFamily) ?? QUESTION_FAMILIES).map(f => (
                     <button key={f} type="button" onClick={() => handleQuestionFamilyChange(f)}
                       aria-pressed={questionFamily === f} className={chipCls(questionFamily === f)}>
-                      {f === 'counting' ? 'Counting a picture' : f === 'operation' ? 'Number operation' : f}
+                      {QUESTION_FAMILY_LABELS[f]}
                     </button>
                   ))}
                 </div>
@@ -754,6 +788,26 @@ export const QuestionTemplatePanel: React.FC = () => {
               <input id="qt-tags" value={tagsText} className={inputCls} onChange={e => setTagsText(e.target.value)}
                 placeholder="e.g. baseline, revision" />
             </div>
+            <div>
+              <label htmlFor="qt-error-topic" className={labelCls}>Error Tag Topic</label>
+              <select id="qt-error-topic" value={errorTagTopic} className={inputCls}
+                onChange={e => { setErrorTagTopic(e.target.value); setErrorTag(''); }}>
+                <option value="counting">Counting</option>
+                <option value="shapes">Shapes</option>
+                <option value="patterns">Patterns</option>
+                <option value="literacy">Literacy</option>
+              </select>
+            </div>
+            <div>
+              <label htmlFor="qt-error-tag" className={labelCls}>Error Tag (optional)</label>
+              <select id="qt-error-tag" value={errorTag} className={inputCls}
+                onChange={e => setErrorTag(e.target.value)}>
+                <option value="">None</option>
+                {errorTagOptions.map(tag => (
+                  <option key={tag} value={tag}>{tag}</option>
+                ))}
+              </select>
+            </div>
           </div>
 
           {formError && (
@@ -778,13 +832,29 @@ export const QuestionTemplatePanel: React.FC = () => {
       {/* CSV import */}
       {showImport && (
         <div className={cardCls}>
-          <div className="flex items-center justify-between mb-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
             <h3 className="text-lg font-semibold text-zinc-900 dark:text-white">Bulk upload</h3>
+            <label className="text-sm text-zinc-600 dark:text-zinc-300">
+              Template stage
+              <select id="template-stage" value={templateStage} onChange={e => setTemplateStage(e.target.value)}
+                className="ml-2 rounded border border-zinc-300 bg-white p-2 dark:border-zinc-700 dark:bg-zinc-900">
+                <option value="">All stages</option>
+                {(levelMap?.stages ?? []).map(stage => (
+                  <option key={stage.stage} value={stage.stage}>{stage.label}</option>
+                ))}
+              </select>
+            </label>
             <button type="button" onClick={downloadCsvTemplate}
               className="text-sm text-indigo-600 dark:text-indigo-400 hover:underline">
               Download template + references (ZIP)
             </button>
           </div>
+          {selectedTemplateStage && (
+            <p className="mb-2 text-sm text-zinc-600 dark:text-zinc-300">
+              {selectedTemplateStage.label}: levels {selectedTemplateStage.firstLevel}–{selectedTemplateStage.lastLevel}
+              {' '}({selectedTemplateStage.levelCount} levels)
+            </p>
+          )}
 
           <p className="text-sm text-zinc-600 dark:text-zinc-300">
             Every row is checked before anything is saved. If any row has a problem, nothing is imported and

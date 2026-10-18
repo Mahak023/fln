@@ -38,6 +38,7 @@ import type {
   EvaluationReport
 } from "./db";
 import { dbStore, type MisconceptionCluster } from "./db";
+import { matchesChoiceLetter } from './answerMatching';
 
 /* ------------------------------------------------------------------ *
  * Feature space
@@ -680,7 +681,8 @@ export function buildFingerprint(
         operands.length >= 2 && op ? requiresRegrouping(operands[0], operands[1], op) : false;
 
       const isCorrect =
-        String(submitted).trim().toLowerCase() === String(q.answer).trim().toLowerCase();
+        String(submitted).trim().toLowerCase() === String(q.answer).trim().toLowerCase()
+        || matchesChoiceLetter(submitted, q);
 
       // Recorded for correct answers too — the consistency block is defined over
       // opportunities, so the successes are the half of the evidence that the

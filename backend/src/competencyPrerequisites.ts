@@ -451,6 +451,22 @@ export function resolvePrerequisites(conceptId: string): string[] {
   return out;
 }
 
+/**
+ * Apex set of a group of concepts: the ones that are not a (transitive) hard
+ * prerequisite of any other concept in the group. Passing an apex concept is
+ * evidence for everything beneath it, so a diagnostic has to ask about every
+ * apex concept and need not ask about the rest (Research/fln_level_networks.md,
+ * Part 4b). Derived from the edge table rather than kept as a written-out
+ * table, so it cannot go stale when an edge changes (FLN #468). Unknown ids
+ * are ignored. Order follows the input.
+ */
+export function apexConcepts(conceptIds: Iterable<string>): string[] {
+  const ids = [...new Set(conceptIds)].filter(id => getLevelForConcept(id) !== undefined);
+  const covered = new Set<string>();
+  for (const id of ids) for (const p of resolvePrerequisites(id)) covered.add(p);
+  return ids.filter(id => !covered.has(id));
+}
+
 export interface ConceptPrerequisiteReport {
   totalConceptsWithPrerequisites: number;
   totalEdges: number;

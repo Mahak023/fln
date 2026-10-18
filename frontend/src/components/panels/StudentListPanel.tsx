@@ -10,6 +10,7 @@ import { apiFetch } from '../../services/apiClient';
 import { parseCSVText } from '../RoleDashboards';
 import { useRosterFilters, resolveRestoredClassTab } from '../../hooks/useRosterFilters';
 import { CertificatesPanel } from './CertificatesPanel';
+import { buildCsv, downloadCsv } from '../../utils/csv';
 
 interface StudentListPanelProps {
   students: Student[];
@@ -17,6 +18,17 @@ interface StudentListPanelProps {
   currentUser: User;
   token: string;
   refreshStudents: () => void;
+}
+
+export function extractInvalidStudentRows(
+  invalidRows: any[],
+  parsedRows: any[],
+  csvResults: { results: any[] }
+): (string | number)[][] {
+  return invalidRows.map(row => {
+    const outcome = csvResults.results.find((r: any) => r.row === parsedRows.indexOf(row) + 1);
+    return [row.name, row.section, row.age, row.classGroup, row.aadharNumber, row.address, outcome ? outcome.reason : ''];
+  });
 }
 
 export const StudentListPanel: React.FC<StudentListPanelProps> = ({
@@ -222,32 +234,7 @@ export const StudentListPanel: React.FC<StudentListPanelProps> = ({
     if (invalidRows.length === 0) return;
 
     const headers = ['name', 'section', 'age', 'classGroup', 'aadharNumber', 'address', 'reason'];
-    const csvContent = [
-      headers.join(','),
-      ...invalidRows.map((row) => {
-        const outcome = csvResults.results.find((r: any) => r.row === parsedRows.indexOf(row) + 1);
-        const reason = outcome ? outcome.reason : '';
-        return [
-          `"${(row.name || '').replace(/"/g, '""')}"`,
-          `"${(row.section || '').replace(/"/g, '""')}"`,
-          `"${(row.age || '').replace(/"/g, '""')}"`,
-          `"${(row.classGroup || '').replace(/"/g, '""')}"`,
-          `"${(row.aadharNumber || '').replace(/"/g, '""')}"`,
-          `"${(row.address || '').replace(/"/g, '""')}"`,
-          `"${(reason || '').replace(/"/g, '""')}"`
-        ].join(',');
-      })
-    ].join('\n');
-
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', 'invalid_students.csv');
-    link.style.visibility = 'hidden';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    downloadCsv('invalid_students.csv', buildCsv(headers, extractInvalidStudentRows(invalidRows, parsedRows, csvResults)));
   };
 
   return (

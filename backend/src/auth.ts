@@ -30,18 +30,43 @@ export function getAuthUser(req: express.Request): User | null {
   return dbStore.getUserSync(payload.email);
 }
 
-// Authorization check for by-ID student endpoints (PATCH/diagnostic/diagnostic-submit).
-// Mirrors the scoping already applied to GET /api/students' list filtering, so a
-// teacher/volunteer/school user can't act on a student outside their own school(s)
-// by guessing/enumerating IDs (IDOR). Superadmin/state/district/block admins keep
-// their existing broad access — restricting THAT scope is a separate, tracked fix.
-export function canAccessStudent(user: User, student: Student): boolean {
+type SchoolArea = { stateCode?: string; districtCode?: string; blockCode?: string } | null | undefined;
+
+const same = (a: unknown, b: unknown) => String(a ?? '').trim().toUpperCase() === String(b ?? '').trim().toUpperCase();
+
+// Is this school inside the area a state, district or block admin looks after?
+// The admin's own code is required (an account with none sees nothing), and when
+// the account also carries its parent codes they must match too, so a district
+// code that repeats in two states cannot reach across. Other roles: false.
+export function adminAreaIncludesSchool(user: User, school: SchoolArea): boolean {
+  if (!school) return false;
+  const stateOk = !user.stateCode || same(school.stateCode, user.stateCode);
+  const districtOk = !user.districtCode || same(school.districtCode, user.districtCode);
+  switch (user.role) {
+    case UserRole.ADMIN:
+      return !!user.stateCode && same(school.stateCode, user.stateCode);
+    case UserRole.DISTRICT_ADMIN:
+      return !!user.districtCode && same(school.districtCode, user.districtCode) && stateOk;
+    case UserRole.BLOCK_ADMIN:
+      return !!user.blockCode && same(school.blockCode, user.blockCode) && districtOk && stateOk;
+    default:
+      return false;
+  }
+}
+
+// Authorization check for by-ID student endpoints (PATCH/diagnostic/diagnostic-submit,
+// certification, observations, Aadhaar reveal). Mirrors the scoping applied to
+// GET /api/students' list filtering, so nobody can act on a student outside their own
+// school(s) or area by guessing/enumerating IDs (IDOR). A state, district or block
+// admin reaches only the students of schools inside their area (FLN #737).
+export async function canAccessStudent(user: User, student: Student): Promise<boolean> {
   switch (user.role) {
     case UserRole.SUPERADMIN:
+      return true;
     case UserRole.ADMIN:
     case UserRole.DISTRICT_ADMIN:
     case UserRole.BLOCK_ADMIN:
-      return true;
+      return adminAreaIncludesSchool(user, await dbStore.getSchoolById(student.schoolId));
     case UserRole.SCHOOL:
     case UserRole.TEACHER:
       return student.schoolId === user.schoolId;

@@ -96,6 +96,9 @@ export function registerSchoolRoutes(app: express.Express) {
     if (!/^[A-Z]+_\d+$/.test(blockCode.toUpperCase())) {
       return res.status(400).json({ error: 'Block code must look like GNT_01.' });
     }
+    if (!blockCode.toUpperCase().startsWith(`${districtCode.toUpperCase()}_`)) {
+      return res.status(400).json({ error: 'Block code must start with the district code, for example GNT_01.' });
+    }
     if (!/^\d{6}$/.test(body.pinCode.trim())) return res.status(400).json({ error: 'PIN code must contain exactly 6 digits.' });
     if (udiseCode && !/^\d{11}$/.test(udiseCode)) return res.status(400).json({ error: 'UDISE code must contain exactly 11 digits.' });
     if (governmentSchoolCode.length > 40) return res.status(400).json({ error: 'Government school code must be 40 characters or fewer.' });
@@ -165,24 +168,42 @@ export function registerSchoolRoutes(app: express.Express) {
       phoneNumber: typeof principal.phone === 'string' ? principal.phone.trim() : undefined
     };
     newSch.principalId = principalUser.id;
-    await dbStore.addSchool(newSch);
-    await dbStore.addUser(principalUser);
-    await dbStore.ensureClassesExist(newSch.id, initialClasses, 'A', principalUser.id);
 
-    // Add Log entry
-    await dbStore.addLog({
-      id: 'log_' + Date.now(),
-      timestamp: new Date().toISOString(),
-      schoolId: newSch.id,
-      schoolName: newSch.name,
-      userId: user.id,
-      userEmail: user.email,
-      userRole: user.role,
-      activityType: 'verify',
-      status: 'Success',
-      details: `Superadmin onboarded a new school: ${newSch.name} (ID: ${newSch.id})`
-    });
+    let schoolCreated = false;
+    let userCreated = false;
+    try {
+      await dbStore.addSchool(newSch);
+      schoolCreated = true;
 
-    res.json(newSch);
+      await dbStore.addUser(principalUser);
+      userCreated = true;
+
+      await dbStore.ensureClassesExist(newSch.id, initialClasses, 'A', '');
+
+      // Add Log entry
+      await dbStore.addLog({
+        id: 'log_' + Date.now(),
+        timestamp: new Date().toISOString(),
+        schoolId: newSch.id,
+        schoolName: newSch.name,
+        userId: user.id,
+        userEmail: user.email,
+        userRole: user.role,
+        activityType: 'verify',
+        status: 'Success',
+        details: `Superadmin onboarded a new school: ${newSch.name} (ID: ${newSch.id})`
+      });
+
+      res.json(newSch);
+    } catch (err: any) {
+      if (userCreated) {
+        await dbStore.deleteUser(principalUser.id).catch(() => {});
+      }
+      if (schoolCreated) {
+        await dbStore.deleteSchool(newSch.id).catch(() => {});
+        await dbStore.deleteClassesForSchool(newSch.id).catch(() => {});
+      }
+      return res.status(500).json({ error: 'Failed to onboard school.', details: err.message });
+    }
   });
 }

@@ -8,6 +8,7 @@ import { CURRICULUM_MAPPING } from './config/curriculumMap';
 import type { StudentCycleLock } from './paperLock';
 import type { ScanQualityResult } from './scanQuality';
 import type { QuestionFamily } from './types/questionTemplateParams';
+import type { ErrorType } from './errorClassification';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -73,6 +74,7 @@ export const connectDB = async () => {
   }
 };
 
+
 // Domain types live in dedicated modules under backend/src. db.ts retains the
 // database implementation and re-exports the domain types for backwards
 // compatibility with existing routes and services that still import them from
@@ -110,6 +112,7 @@ import type {
   AnswerSubmission,
   TeacherObservationRecord,
   WorksheetGenerationWindow,
+  AttemptRecord,
 } from './assessment.types';
 import type { EvaluationReport } from './evaluation.types';
 
@@ -125,6 +128,9 @@ import type {
   BestPractice,
   MisconceptionCluster,
 } from './operations.types';
+import { emitKeypressEvents } from 'readline';
+
+
 
 interface DatabaseSchema {
   users: User[];
@@ -155,6 +161,7 @@ interface DatabaseSchema {
   studentCycleLocks: StudentCycleLock[];
   generationWindows: WorksheetGenerationWindow[];
   teacherObservationRecords: TeacherObservationRecord[];
+  attemptRecords: AttemptRecord[];
 }
 
 const COLLECTION_NAMES: Record<keyof DatabaseSchema, string> = {
@@ -186,6 +193,7 @@ const COLLECTION_NAMES: Record<keyof DatabaseSchema, string> = {
   studentCycleLocks: 'studentCycleLocks',
   generationWindows: 'generationWindows',
   teacherObservationRecords: 'teacher_observation_records',
+  attemptRecords: 'attempt_records',
 };
 
 /**
@@ -405,6 +413,15 @@ export class DBStore {
           console.warn('Failed to ensure indexes on "evaluationReports" collection:', e.message);
         }
 
+        // #479: getAttemptRecordsForStudent is the only read today, keyed
+        // by studentId.
+        try {
+          await db.collection('attempt_records').createIndex({ studentId: 1 });
+          console.log('Successfully ensured indexes on "attempt_records" collection');
+        } catch (e: any) {
+          console.warn('Failed to ensure indexes on "attempt_records" collection:', e.message);
+        }
+
         for (const [key, collName] of Object.entries(COLLECTION_NAMES)) {
           (this.data as any)[key] = [];
         }
@@ -522,6 +539,11 @@ export class DBStore {
   async getSchools() {
     if (this.mongoDb) return await this.mongoDb.collection<School>('schools').find({}).toArray();
     return this.data?.schools || [];
+  }
+  async getSchoolById(id: string): Promise<School | null> {
+    if (!id) return null;
+    if (this.mongoDb) return (await this.mongoDb.collection<School>('schools').findOne({ id })) as School | null;
+    return (this.data?.schools || []).find(sc => sc.id === id) ?? null;
   }
   async getClasses() {
     if (this.mongoDb) return await this.mongoDb.collection<ClassGroup>('classes').find({}).toArray();
@@ -645,7 +667,7 @@ export class DBStore {
     }
     return (this.data?.students || []).find(s => s.id === id) || null;
   }
-  async countStudents(opts?: { schoolId?: string; teacherId?: string; q?: string }) {
+  async countStudents(opts?: { schoolId?: string | string[]; teacherId?: string; q?: string }) {
     // Mirrors getStudents' search semantics so the route's X-Total-Count
     // header reflects the full match count, not the post-pagination
     // page count. The previous version took no `q` and the route fell
@@ -654,7 +676,7 @@ export class DBStore {
     const search = (opts?.q || '').trim().toLowerCase();
     if (this.mongoDb) {
       const filter: any = {};
-      if (opts?.schoolId) filter.schoolId = opts.schoolId;
+      if (opts?.schoolId) filter.schoolId = Array.isArray(opts.schoolId) ? { $in: opts.schoolId } : opts.schoolId;
       if (opts?.teacherId) filter.teacherId = opts.teacherId;
       if (search) {
         // Mirror the BSON-range + collation pattern from getStudents
@@ -683,7 +705,7 @@ export class DBStore {
       return await this.mongoDb.collection('students').countDocuments(filter);
     }
     let result = this.data?.students || [];
-    if (opts?.schoolId) result = result.filter(s => s.schoolId === opts.schoolId);
+    if (opts?.schoolId) { const ids = ([] as string[]).concat(opts.schoolId); result = result.filter(s => ids.includes(s.schoolId)); }
     if (opts?.teacherId) result = result.filter(s => s.teacherId === opts.teacherId);
     if (search) {
       // Same prefix-only semantics as getStudents' in-memory path.
@@ -935,6 +957,13 @@ export class DBStore {
     if (this.mongoDb) return await this.mongoDb.collection<Worksheet>('worksheets').find({}).toArray();
     return this.data?.worksheets || [];
   }
+  /** Worksheets with the given ids; used to resolve the questions behind a student's evaluation reports. */
+  async getWorksheetsByIds(ids: string[]): Promise<Worksheet[]> {
+    if (ids.length === 0) return [];
+    if (this.mongoDb) return await this.mongoDb.collection<Worksheet>('worksheets').find({ id: { $in: ids } }).toArray();
+    const wanted = new Set(ids);
+    return (this.data?.worksheets || []).filter(w => wanted.has(w.id));
+  }
   async getStudentCycleLocks() {
     if (this.mongoDb) return await this.mongoDb.collection<StudentCycleLock>('studentCycleLocks').find({}).toArray();
     return this.data?.studentCycleLocks || [];
@@ -1030,15 +1059,15 @@ export class DBStore {
      * Updated 2026-09-18 for PR #517 (the year-before-Class-1/"Balvatika" stage
      * finalisation against NCF-FS), which added 15 nodes and moved 4 nodes into
      * Stage 3, shifting every boundary below from L28 onward. The registry is
-     * now 108 levels, not 93.
+     * now 109 levels, not 93 (L-to-S crosswalk, PR #554).
      *
-     *   Pre-school 1:            1-7
-     *   Pre-school 2:            8-17
-     *   Year before Class 1:    18-46   (was Pre-school 3, 18-27 — see curriculumMap.ts)
-     *   Class 1:                47-59
-     *   Class 2:                60-76
-     *   Class 3:                77-90
-     *   Class 4:                91-108
+     *   Pre-school 1:            1-8
+     *   Pre-school 2:            9-18
+     *   Year before Class 1:    19-46   (Pre-school 3, the Balvatika stage — see curriculumMap.ts)
+     *   Class 1:                47-60
+     *   Class 2:                61-77
+     *   Class 3:                78-91
+     *   Class 4:                92-109
      *
      * classNumber here is documented (db.ts CertificationEligibility etc.) as 2-4
      * per SRS §3 — the classNumber<=1 branch exists but Class 1 / the year-before
@@ -1046,10 +1075,10 @@ export class DBStore {
      * + teacher-observation worksheet generation for that stage is still to be built).
      */
   static classLevelRange(classNumber: number): { min: number; max: number } {
-    if (classNumber <= 1) return { min: 47, max: 59 }; // class 1
-    if (classNumber === 2) return { min: 60, max: 76 };
-    if (classNumber === 3) return { min: 77, max: 90 };
-    return { min: 91, max: 108 }; // class 4 (and any >4 default)
+    if (classNumber <= 1) return { min: 47, max: 60 }; // class 1
+    if (classNumber === 2) return { min: 61, max: 77 };
+    if (classNumber === 3) return { min: 78, max: 91 };
+    return { min: 92, max: 109 }; // class 4 (and any >4 default)
   }
 
   /**
@@ -1857,6 +1886,46 @@ export class DBStore {
     return school;
   }
 
+  async deleteSchool(id: string): Promise<boolean> {
+    if (this.mongoDb) {
+      await this.mongoDb.collection('schools').deleteOne({ id });
+    }
+    if (this.data) {
+      const idx = this.data.schools.findIndex(s => s.id === id);
+      if (idx !== -1) {
+        this.data.schools.splice(idx, 1);
+        if (!this.mongoDb) await this.save();
+      }
+    }
+    return true;
+  }
+
+  async deleteUser(id: string): Promise<boolean> {
+    if (this.mongoDb) {
+      await this.mongoDb.collection('users').deleteOne({ id });
+    }
+    if (this.data) {
+      const idx = this.data.users.findIndex(u => u.id === id);
+      if (idx !== -1) {
+        this.data.users.splice(idx, 1);
+        if (!this.mongoDb) await this.save();
+      }
+    }
+    return true;
+  }
+
+  async deleteClassesForSchool(schoolId: string): Promise<number> {
+    if (this.mongoDb) {
+      await this.mongoDb.collection('classes').deleteMany({ schoolId });
+    }
+    if (this.data) {
+      const initialLen = this.data.classes.length;
+      this.data.classes = this.data.classes.filter(c => c.schoolId !== schoolId);
+      if (!this.mongoDb && this.data.classes.length !== initialLen) await this.save();
+    }
+    return 0;
+  }
+
   async addLog(log: LogEntry) {
     // Phase 2 hardening fix: guard the Mongo write like addStudent() does.
     // Previously `this.mongoDb!` crashed here whenever MongoDB was absent
@@ -2234,6 +2303,30 @@ export class DBStore {
       { $set: record },
       { upsert: true }
     );
+    return record;
+  }
+
+  // --- Attempt Record Methods (Evidence Model, #479) ----------------------
+  // See AttemptRecord's own comment for what this captures and why it's a
+  // separate collection from answerSubmissions.
+
+  /** Every attempt one student has made; richest-evidence-first filtering/sorting is left to callers. */
+  async getAttemptRecordsForStudent(studentId: string): Promise<AttemptRecord[]> {
+    if (!this.mongoDb) return (this.data?.attemptRecords || []).filter(a => a.studentId === studentId);
+    return await this.mongoDb!.collection<AttemptRecord>('attempt_records').find({ studentId }).toArray();
+  }
+
+  /** Append-only -- an attempt is a historical fact, not something a later attempt should overwrite. */
+  async addAttemptRecord(record: AttemptRecord): Promise<AttemptRecord> {
+    if (!this.mongoDb) {
+      if (this.data) {
+        if (!this.data.attemptRecords) this.data.attemptRecords = [];
+        this.data.attemptRecords.push(record);
+        await this.save();
+      }
+      return record;
+    }
+    await this.mongoDb!.collection('attempt_records').insertOne(record);
     return record;
   }
 
@@ -4458,7 +4551,10 @@ export class DBStore {
       // Seeded empty on purpose, same reasoning as questionLogics above: a
       // teacher's observation of a real child is not something to fabricate
       // demo data for.
-      teacherObservationRecords: []
+      teacherObservationRecords: [],
+      // Same reasoning again -- a child's actual hints/scaffolding evidence
+      // isn't something to fabricate demo data for either.
+      attemptRecords: []
     };
   }
 }

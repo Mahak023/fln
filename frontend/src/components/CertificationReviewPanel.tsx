@@ -174,6 +174,7 @@ export const CertificationReviewPanel: React.FC<Props> = ({ currentUser, token }
           <div className="text-[10px] font-mono text-slate-400">{row.studentId}</div>
         </div>
       ),
+      exportValue: (row) => row.studentName,
       sortKey: 'studentName',
     },
     { header: 'Class', accessor: 'className', sortKey: 'className' },
@@ -181,6 +182,7 @@ export const CertificationReviewPanel: React.FC<Props> = ({ currentUser, token }
     {
       header: 'Version',
       accessor: (row) => <span className="font-mono text-xs">v{row.version}</span>,
+      exportValue: (row) => `v${row.version}`,
       sortKey: 'version',
     },
     {
@@ -190,6 +192,7 @@ export const CertificationReviewPanel: React.FC<Props> = ({ currentUser, token }
           {row.status.toUpperCase()}
         </span>
       ),
+      exportValue: (row) => row.status.toUpperCase(),
       sortKey: 'status',
     },
     {
@@ -199,6 +202,7 @@ export const CertificationReviewPanel: React.FC<Props> = ({ currentUser, token }
           {row.reviewReason ?? '—'}
         </div>
       ),
+      exportValue: (row) => row.reviewReason ?? '',
     },
     {
       header: 'Action',
