@@ -283,3 +283,21 @@ test('Case 6: teacher-supplied errorType overrides classifier in rootCauses (#45
   assert.equal(rootCauses[0].questionId, 'q1');
   assert.equal(rootCauses[0].errorType, 'conceptual', 'Teacher errorType "conceptual" must override classifier');
 });
+
+test('Case 7: a teacher label is kept when a later override changes another question (#459)', async () => {
+  const reportId = 'rep-override-label-kept';
+  storeData?.evaluationReports.push(createReport(reportId));
+
+  const first = await api('PATCH', `/api/evaluation/${reportId}/override`, TEACHER, {
+    corrections: [{ questionId: 'q1', isCorrect: false, errorType: 'conceptual' }],
+  });
+  assert.equal(first.status, 200);
+
+  const second = await api('PATCH', `/api/evaluation/${reportId}/override`, TEACHER, {
+    corrections: [{ questionId: 'q3', isCorrect: true, correctedAnswer: '9' }],
+  });
+  assert.equal(second.status, 200);
+
+  const q1 = second.json.report.rootCauses.find((r: any) => r.questionId === 'q1');
+  assert.equal(q1.errorType, 'conceptual', 'the label from the first override must still be there');
+});

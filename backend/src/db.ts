@@ -599,7 +599,7 @@ export interface EvaluationReport {
   // the teacher-override endpoint requires it to exist on the report it's
   // correcting, since a correction is meaningless without knowing which
   // question is being corrected.
-  questionResults?: { questionId: string; question?: string; correctAnswer?: string; submittedAnswer: string; isCorrect: boolean }[];
+  questionResults?: { questionId: string; question?: string; correctAnswer?: string; submittedAnswer: string; isCorrect: boolean; teacherErrorType?: string }[];
     teacherReviewed?: boolean;
     reviewedBy?: string; // reviewing teacher's email
     reviewedAt?: string;

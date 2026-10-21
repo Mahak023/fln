@@ -1363,6 +1363,9 @@ export function registerEvaluationRoutes(app: express.Express) {
         ...q,
         submittedAnswer: correction.correctedAnswer ?? q.submittedAnswer,
         isCorrect: correction.isCorrect,
+        // Keep the teacher's label so a later override does not lose it.
+        // A question that is now correct has no error to label.
+        teacherErrorType: correction.isCorrect ? undefined : (correction.errorType ?? q.teacherErrorType),
       };
     });
 
@@ -1394,8 +1397,8 @@ export function registerEvaluationRoutes(app: express.Express) {
         // for still-wrong questions that have a teacher diagnostic label.
         if (updatedRootCauses.length > 0) {
           updatedRootCauses = updatedRootCauses.map(rc => {
-            const correction = correctionMap.get(rc.questionId);
-            return correction?.errorType ? { ...rc, errorType: correction.errorType as any } : rc;
+            const label = correctionMap.get(rc.questionId)?.errorType ?? updatedQuestionResults.find(q => q.questionId === rc.questionId)?.teacherErrorType;
+            return label ? { ...rc, errorType: label as any } : rc;
           });
         }
       }
