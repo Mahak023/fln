@@ -70,3 +70,66 @@ test('backend/src/index.ts sets trust proxy for reverse proxies (#753)', () => {
     "index.ts must configure app.set('trust proxy', 1)",
   );
 });
+
+import type { AddressInfo } from 'node:net';
+
+async function startApp(): Promise<{ base: string; close: () => void }> {
+  const app = express();
+  app.set('trust proxy', 1); // same setting as backend/src/index.ts
+  app.use(express.json());
+  registerMfaEnrollmentRoutes(app);
+  registerAadhaarDetokenizeRoutes(app);
+  const server = app.listen(0);
+  const { port } = server.address() as AddressInfo;
+  return { base: `http://127.0.0.1:${port}`, close: () => server.close() };
+}
+
+// No login token is sent, so the route answers 401/403. The limiter runs
+// BEFORE the handler, so those answers still count towards the limit.
+function post(base: string, route: string, ip: string): Promise<number> {
+  return fetch(base + route, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': ip },
+    body: '{}',
+  }).then((r) => r.status);
+}
+
+const LIMITED_ROUTES = [
+  '/api/me/mfa/enroll',
+  '/api/me/mfa/verify',
+  '/api/students/s1/aadhaar/step-up/request',
+  '/api/students/s1/aadhaar/step-up/approve',
+  '/api/students/s1/aadhaar/detokenize',
+];
+
+test('every secret-checking route returns 429 once one address passes the limit (#753)', async () => {
+  const { base, close } = await startApp();
+  try {
+    for (const [i, route] of LIMITED_ROUTES.entries()) {
+      const ip = `10.1.0.${i + 1}`; // a fresh address per route, so the counters do not mix
+      let status = 0;
+      for (let n = 0; n < 50; n++) status = await post(base, route, ip);
+      assert.notEqual(status, 429, `${route}: the 50th request must still be answered`);
+      assert.equal(await post(base, route, ip), 429, `${route}: the 51st request must be blocked`);
+    }
+  } finally {
+    close();
+  }
+});
+
+test('one blocked address does not block another address (#753)', async () => {
+  const { base, close } = await startApp();
+  try {
+    for (let n = 0; n < 51; n++) await post(base, '/api/me/mfa/verify', '10.2.0.1');
+    assert.equal(await post(base, '/api/me/mfa/verify', '10.2.0.1'), 429);
+    assert.notEqual(await post(base, '/api/me/mfa/verify', '10.2.0.2'), 429);
+  } finally {
+    close();
+  }
+});
+
+test('index.ts really calls app.set("trust proxy", 1) (not only in a comment) (#753)', () => {
+  const src = fs.readFileSync(path.resolve(__dirname, '../src/index.ts'), 'utf-8');
+  assert.match(src, /^\s*app\.set\(\s*['"]trust proxy['"]\s*,\s*1\s*\)\s*;/m);
+});
+
