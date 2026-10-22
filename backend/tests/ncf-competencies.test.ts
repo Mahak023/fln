@@ -262,3 +262,21 @@ describe('stage-level coverage', () => {
     }
   });
 });
+
+
+// Values given in issue #849 (NCF-FS 2022 Annexure 1). A concept marked null is
+// beyond the NCF tables (NIPUN Bharat only). Change these only with a source row.
+describe('values fixed by issue #849', () => {
+  const FIXED: Record<string, string | null> = {
+    'S3.1': 'C-8.5', 'S3.2': 'C-8.3', 'S3.3': 'C-8.5', 'S3.4': 'C-8.4', 'S3.5': 'C-8.1', 'S3.7': 'C-8.9',
+    'S4.3': 'C-8.3', 'S4.4': 'C-8.5', 'S4.6': 'C-8.6', 'S4.7': 'C-8.6', 'S4.8': 'C-8.8', 'S4.9': 'C-8.9', 'S4.10': 'C-8.9',
+    'S5.4': 'C-8.6', 'S5.5': 'C-8.6', 'S5.6': 'C-8.7', 'S5.7': 'C-8.7', 'S5.11': 'C-8.9', 'S5.12': 'C-8.8',
+    'S6.9': 'C-8.8', 'S6.10': 'C-8.10', 'S6.13': 'C-8.2',
+    'S5.1': null, 'S5.8': null, 'S6.4': null, 'S6.5': null, 'S6.6': null, 'S6.7': null, 'S6.8': null, 'S6.12': null,
+  };
+  for (const [conceptId, expected] of Object.entries(FIXED)) {
+    test(`${conceptId} maps to ${expected}`, () => {
+      assert.strictEqual(getCompetencyForConcept(conceptId), expected);
+    });
+  }
+});

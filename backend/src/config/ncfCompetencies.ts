@@ -6,10 +6,10 @@
  * (C-8.1 through C-8.13), or `null` where no sourced mapping exists.
  *
  * Source: NCF-FS 2022, Annexure 1, Tables 29–41 (C-8.1 to C-8.13).
- * Traceability: Research/fln_year_before_class1.md §5 (Balvatika outcomes with
+ * Traceability: Research/03-109-levels/fln_year_before_class1.md §5 (Balvatika outcomes with
  * explicit NCF table references in the §5g edge evidence); the §5a–5e tables
  * cite the NCF-FS outcome row numbers and table names directly.
- * Research/fln_framework_from_scratch.md cites NIPUN Bharat and NCERT for
+ * Research/02-93-levels/framework-build/fln_framework_from_scratch.md cites NIPUN Bharat and NCERT for
  * Class 1–3 concepts; strand-to-competency alignment follows the NCF-FS table
  * structure (each C-8.x table covers one mathematical domain).
  *
@@ -72,18 +72,15 @@ export const NCF_COMPETENCY_BY_CONCEPT: Record<string, NcfCompetencyCode | null>
   // Source: fln_year_before_class1.md §5a–5g, NCF-FS Annexure 1 Column C
   // ═══════════════════════════════════════════════════════════════════════════
 
-  // §5a row 7: "Recognises numerals to 9" — NCF-FS C-8.3 Table 31
-  // §5g edge: "NCF C-8.5 (recognises at B → writes at C)" confirms C-8.5 for
-  // writing, but recognition itself is C-8.3 (number names / numerals).
-  'S3.1': 'C-8.3',
+  // §5a row 7: "Recognises numerals to 9" — NCF-FS Table 33
+  'S3.1': 'C-8.5',
 
   // §5a row 2: "Counts objects to 10; the last number said is the total"
   // Counting & cardinality sit in NCF-FS C-8.3 (Table 31)
   'S3.2': 'C-8.3',
 
-  // §5a row 9: "Compares two numbers to 9" — comparison of numbers
-  // Object-mediated numeral comparison; NCF-FS C-8.3 (Table 31)
-  'S3.3': 'C-8.3',
+  // §5a row 9: "Compares two numbers to 9" — NCF-FS Table 33
+  'S3.3': 'C-8.5',
 
   // §5a row 15 (partly): "Arranges up to 5 objects by size, length or weight"
   // NCF-FS C-8.4 (Table 32: Seriation and Classification)
@@ -92,8 +89,8 @@ export const NCF_COMPETENCY_BY_CONCEPT: Record<string, NcfCompetencyCode | null>
 
   // §5a row 14: "Sorts objects by features they recognise"
   // §5a row 19: "Classifies objects by three features"
-  // NCF-FS C-8.4 (Table 32: Arranging and Sorting / Classification)
-  'S3.5': 'C-8.4',
+  // NCF-FS Table 29: Pre-Number Concepts
+  'S3.5': 'C-8.1',
 
   // Numeral sequencing — "Says/sings number names in correct sequence up to 20"
   // curriculumMap.ts comment: "scoped exactly to NCF-FS C-8.3 Table 31 Column C"
@@ -257,8 +254,8 @@ export const NCF_COMPETENCY_BY_CONCEPT: Record<string, NcfCompetencyCode | null>
   // Column E (age 7–8)
   // ═══════════════════════════════════════════════════════════════════════════
 
-  // Reading & Writing 3-Digit Numbers — NCF-FS C-8.5 (number representation)
-  'S5.1': 'C-8.5',
+  // Reading & Writing 3-Digit Numbers — beyond the NCF tables (NIPUN Bharat only), so null
+  'S5.1': null,
 
   // Tens as Bundles/Groups (place value unitising) — NCF-FS C-8.3
   'S5.2': 'C-8.3',
@@ -281,8 +278,8 @@ export const NCF_COMPETENCY_BY_CONCEPT: Record<string, NcfCompetencyCode | null>
   // §5g edge from S3.17: "NCF C-8.7 row 2"
   'S5.7': 'C-8.7',
 
-  // Multiplication Tables (2,3,4,5,10) — NCF-FS C-8.7 (multiplication/division)
-  'S5.8': 'C-8.7',
+  // Multiplication Tables (2,3,4,5,10) — beyond the NCF tables (NIPUN Bharat only), so null
+  'S5.8': null,
 
   // NOTE: S5.9 (Currency) moved to Stage 3 above
 
@@ -339,20 +336,20 @@ export const NCF_COMPETENCY_BY_CONCEPT: Record<string, NcfCompetencyCode | null>
   // 3-Digit Comparison & Ordering — NCF-FS C-8.3
   'S6.3': 'C-8.3',
 
-  // Reading & Writing 4-Digit Numbers — NCF-FS C-8.5
-  'S6.4': 'C-8.5',
+  // Reading & Writing 4-Digit Numbers — beyond the NCF tables (NIPUN Bharat only), so null
+  'S6.4': null,
 
-  // 3-Digit Addition & Subtraction Problems — NCF-FS C-8.6
-  'S6.5': 'C-8.6',
+  // 3-Digit Addition & Subtraction Problems — beyond the NCF tables (NIPUN Bharat only), so null
+  'S6.5': null,
 
-  // Full Multiplication Tables (2-10) — NCF-FS C-8.7
-  'S6.6': 'C-8.7',
+  // Full Multiplication Tables (2-10) — beyond the NCF tables (NIPUN Bharat only), so null
+  'S6.6': null,
 
-  // Division Facts & Inverse Relation — NCF-FS C-8.7
-  'S6.7': 'C-8.7',
+  // Division Facts & Inverse Relation — beyond the NCF tables (NIPUN Bharat only), so null
+  'S6.7': null,
 
-  // Standard Measurement Units — NCF-FS C-8.9
-  'S6.8': 'C-8.9',
+  // Standard Measurement Units — beyond the NCF tables (NIPUN Bharat only), so null
+  'S6.8': null,
 
   // Relating 2D Faces to 3D Solids — NCF-FS C-8.8
   // §5g edge from S3.21: "NCF C-8.8 (tracing faces at C → relating 2D and 3D later)"
@@ -364,9 +361,8 @@ export const NCF_COMPETENCY_BY_CONCEPT: Record<string, NcfCompetencyCode | null>
   // Money Arithmetic — NCF-FS C-8.11
   'S6.11': 'C-8.11',
 
-  // Formal Fractions (Half/Quarter) — NCF-FS C-8.3 (numbers and operations)
-  // Fractions at this stage remain under the broad number domain in NCF-FS
-  'S6.12': 'C-8.3',
+  // Formal Fractions (Half/Quarter) — beyond the NCF tables (NIPUN Bharat only), so null
+  'S6.12': null,
 
   // Pattern Rules & Generalization — NCF-FS C-8.2
   // §5g edge from S3.19: "NCF C-8.2" (pattern domain)
