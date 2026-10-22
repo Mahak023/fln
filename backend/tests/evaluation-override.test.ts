@@ -16,7 +16,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { Worksheet, EvaluationReport } from '../src/db';
-import { classifyErrorType } from '../src/errorClassification';
 
 // Bootstrap: isolate env + cwd BEFORE importing application modules
 const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fln-eval-override-test-'));

@@ -24,12 +24,8 @@
   },
   "dependencies": {
     "jose": "^5.9.6",
-    "jpeg-js": "^0.4.4",
     "mongodb": "^7.5.0",
     "mongoose": "^9.7.4",
     "otpauth": "^9.5.1"
-  },
-  "devDependencies": {
-    "@types/jpeg-js": "^0.3.0"
   }
 }

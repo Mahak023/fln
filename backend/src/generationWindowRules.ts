@@ -1,12 +1,11 @@
-import { UserRole } from './identity.types';
-import type { WorksheetGenerationWindow } from './assessment.types';
+import { UserRole, WorksheetGenerationWindow } from './db';
 
 export function getGenerationWindowStatus(
   window: WorksheetGenerationWindow,
   userRole: UserRole,
   currentTime: Date
 ): 'active' | 'teacher-priority-ended' | 'school-priority-not-started' | 'expired' {
-  if (window.closed || currentTime >= new Date(window.end)) {
+  if (window.closed || currentTime >= new Date(window.end)){
     return 'expired';
   }
 
@@ -48,4 +47,4 @@ export function isWorksheetGenerationLocked(
   worksheet?: { locks?: { locked: boolean } } | null
 ): boolean {
   return Boolean(worksheet && worksheet.locks?.locked);
-}
+}

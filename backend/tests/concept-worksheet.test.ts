@@ -161,8 +161,8 @@ async function post(body: unknown, email: string | null = 'gps-mt-001.t01@fln.or
   });
   let json: any = null; try { json = await res.json(); } catch { /* not json */ }
   if (json?.pdfUrl) {
-  const paperGeneratorPath = fileURLToPath(new URL('../src/paperGenerator.ts', import.meta.url));
-  keep(path.join(path.dirname(fs.realpathSync(paperGeneratorPath)), '..', json.pdfUrl.replace(/^\//, '')));
+    const paperGeneratorPath = fileURLToPath(new URL('../src/paperGenerator.ts', import.meta.url));
+    keep(path.join(path.dirname(fs.realpathSync(paperGeneratorPath)), '..', json.pdfUrl.replace(/^\//, '')));
   }
   return { status: res.status, json };
 }

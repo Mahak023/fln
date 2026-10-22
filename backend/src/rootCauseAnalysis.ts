@@ -11,7 +11,9 @@
  * The logic itself is unchanged from the diagnostic path: a real pipeline
  * verdict wins when one exists; otherwise this falls back to a fully
  * deterministic, no-AI-call computation from the submitted/expected answer
- * pair via `classifyErrorType`.
+ * pair via `classifyErrorType` — which, per `#458`, is actually the only
+ * branch that ever runs today, since nothing currently wires a verdict into
+ * `evalData`.
  */
 
 import type { Question, EvaluationReport } from './db';
@@ -48,7 +50,8 @@ export function computeRootCauseAnalysis(
 
   if (rootCauses.length === 0) {
     // A real pipeline verdict (when one exists) always wins over the local
-    // classifier. Otherwise, classify each question deterministically.
+    // classifier — this is the fallback for the case that's true today,
+    // where evalData is always {} because nothing wires it in (FLN #458).
     const overallType = evalData?.error_type ? String(evalData.error_type) : null;
     const overallAnalysis = evalData?.root_cause ? String(evalData.root_cause) : '';
     rootCauses = questions
@@ -58,11 +61,7 @@ export function computeRootCauseAnalysis(
         error: String(answers?.[q.question_id] ?? ''),
         topic: q.topic || 'Unclassified',
         flnLevel: Number(q.source_level ?? 0),
-        errorType: overallType ?? classifyErrorType(
-          answers?.[q.question_id],
-          q.answer,
-          q,
-        ),
+        errorType: overallType ?? classifyErrorType(answers?.[q.question_id], q.answer, q),
         analysis: overallAnalysis
       }));
   }
@@ -72,19 +71,13 @@ export function computeRootCauseAnalysis(
     evalData?.performance_by_difficulty && typeof evalData.performance_by_difficulty === 'object'
       ? evalData.performance_by_difficulty
       : undefined;
-
   if (!performanceByDifficulty) {
     const tally: NonNullable<EvaluationReport['performanceByDifficulty']> = {};
     for (const q of questions) {
       const difficulty = q.difficulty || 'medium';
       const cell = tally[difficulty] ?? { attempted: 0, correct: 0 };
       cell.attempted++;
-      if (
-        norm(answers?.[q.question_id]) === norm(q.answer) ||
-        matchesChoiceLetter(answers?.[q.question_id], q)
-      ) {
-        cell.correct++;
-      }
+      if (norm(answers?.[q.question_id]) === norm(q.answer) || matchesChoiceLetter(answers?.[q.question_id], q)) cell.correct++;
       tally[difficulty] = cell;
     }
     if (Object.keys(tally).length > 0) performanceByDifficulty = tally;
