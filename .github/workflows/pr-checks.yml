@@ -51,4 +51,17 @@ jobs:
         run: npm ci   # fails if package-lock.json is out of step with package.json
 
       - name: Run PR checks
+        env:
+          PR_CHECKS_REPORT: pr-checks-report/report.md
         run: bash scripts/ci/pr-checks.sh
+
+      # The comment bot (pr-checks-comment.yml) reads this. It runs even when the
+      # checks fail, which is exactly when the report is needed.
+      - name: Keep the report for the comment bot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-checks-report
+          path: pr-checks-report/report.md
+          if-no-files-found: ignore
+          retention-days: 3

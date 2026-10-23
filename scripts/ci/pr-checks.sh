@@ -28,14 +28,19 @@ set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
-declare -a NAMES RESULTS
+declare -a NAMES RESULTS LOGS
 record() { NAMES+=("$1"); RESULTS+=("$2"); }
 section() { printf '\n\033[1m=== %s ===\033[0m\n' "$1"; }
+LOG_DIR="$(mktemp -d)"
 
 run() { # run <label> <command...>
+  # Output is kept per section so the failing part can be quoted in the PR comment.
   local label="$1"; shift
+  local log="$LOG_DIR/${#NAMES[@]}.log"
   section "$label"
-  if "$@"; then record "$label" PASS; else record "$label" FAIL; fi
+  if "$@" >"$log" 2>&1; then record "$label" PASS; else record "$label" FAIL; fi
+  cat "$log"
+  LOGS+=("$log")
 }
 
 # ---------------------------------------------------------------- 1. markers
@@ -106,6 +111,34 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     done
     [ $failed -ne 0 ] && echo && echo "Open the **Run PR checks** step for the failing section. To run the same checks locally: \`npm run check:pr\`."
   } >> "$GITHUB_STEP_SUMMARY"
+fi
+# Report for the PR comment bot (.github/workflows/pr-checks-comment.yml). Only written
+# when PR_CHECKS_REPORT names a file, so a local run is unchanged.
+if [ -n "${PR_CHECKS_REPORT:-}" ]; then
+  mkdir -p "$(dirname "$PR_CHECKS_REPORT")"
+  {
+    if [ $failed -eq 0 ]; then echo "### ✅ PR checks passed"; else echo "### ❌ PR checks failed"; fi
+    echo
+    echo "| Check | Result |"
+    echo "|---|---|"
+    for i in "${!NAMES[@]}"; do
+      echo "| ${NAMES[$i]} | $([ "${RESULTS[$i]}" = PASS ] && echo '✅' || echo '❌') |"
+    done
+    for i in "${!NAMES[@]}"; do
+      [ "${RESULTS[$i]}" = FAIL ] || continue
+      echo
+      echo "**${NAMES[$i]}** — last lines of its output:"
+      echo
+      echo '```text'
+      # strip colour codes, and turn any ``` into ''' so the output cannot break out of the block
+      tail -n 25 "${LOGS[$i]}" | sed -e $'s/\x1b\\[[0-9;]*m//g' -e "s/\`\`\`/'''/g" -e "s#$ROOT/##g" | cut -c1-300
+      echo '```'
+    done
+    if [ $failed -ne 0 ]; then
+      echo
+      echo 'To run the same checks on your computer: `npm install`, then `npm run check:pr`. Fix what is listed above and push again; this comment updates itself.'
+    fi
+  } > "$PR_CHECKS_REPORT"
 fi
 [ $failed -eq 0 ] && echo "All checks passed." || echo "One or more checks FAILED — see the sections above."
 exit $failed
