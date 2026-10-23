@@ -33,6 +33,12 @@ Rules:
 - `scripts/ci/routes-baseline.txt` and `scripts/ci/levels-baseline.txt` work the same way as the smoke baseline: they hold problems that already existed, with the reason, and the check fails only on a new one. Fix it, then delete the line.
 - **A new route that is meant to answer without a login** (a public lookup, a health check) must be added to `scripts/ci/public-routes.txt` with a reason. Otherwise the all-routes check reads it as a route someone forgot to protect.
 
+### The bots
+
+- **PR checks comment** (`.github/workflows/pr-checks-comment.yml`): when the checks fail, it posts one comment on the PR with the failing check and the last lines of its output, and edits that comment on every push. It says nothing when everything passes, and changes an earlier failure comment to "passed" once the PR is fixed. It works for fork PRs and never runs the PR's code.
+- **Lockfile notice** (`.github/workflows/lockfile-notice.yml`): when `package-lock.json` changes on `main`, each open PR that also changes a package file gets one comment with the exact commands to fix the conflict.
+- **First-time-contributor fork PRs still wait for a maintainer's "Approve and run".** This is deliberate: that click is GitHub's guard against running an outsider's code, so it is not automated. The checks run as soon as it is clicked.
+
 ### When the number of levels changes
 
 1. Add the new levels to `CURRICULUM_MAPPING` and regenerate the snapshot: `npx tsx scripts/generate-skill-level-map.ts`.
