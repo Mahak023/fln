@@ -20,6 +20,10 @@
 #   4. builds                — frontend `vite build` and backend bundle
 #   5. route smoke test      — boots the server with no database and calls every
 #                              parameterless GET route (see smoke-routes.sh)
+#   6. all-routes check      — every route, with no login / as teacher / as superadmin:
+#                              unprotected or crashing routes fail (see check-routes.ts)
+#   Also: ESLint (bug-class rules, existing errors baselined) and the level-count
+#   check (109 levels agree everywhere; stale 59/93 numbers fail — check-levels.ts)
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
@@ -53,10 +57,12 @@ check_conflict_markers() {
 }
 run "conflict markers" check_conflict_markers
 run "skill/level snapshot drift" npx tsx scripts/generate-skill-level-map.ts --check
+run "level count consistency" npx tsx scripts/ci/check-levels.ts
 
 # ----------------------------------------------------------- 2. type checks
 run "type check: backend"  npm run lint --workspace @fln/backend  --silent
 run "type check: frontend" npm run lint --workspace @fln/frontend --silent
+run "eslint" npx eslint .
 
 # ------------------------------------------------------------------ 3. tests
 run_backend_tests() {
@@ -80,6 +86,7 @@ run "build: backend"  npm run build --workspace @fln/backend  --silent
 
 # ------------------------------------------------------------ 5. route smoke
 run "route smoke test" bash "$ROOT/scripts/ci/smoke-routes.sh"
+run "all routes: auth + no crash" npx tsx scripts/ci/check-routes.ts
 
 # ------------------------------------------------------------------- summary
 printf '\n\033[1m=== Summary ===\033[0m\n'
@@ -88,5 +95,17 @@ for i in "${!NAMES[@]}"; do
   printf '  %-28s %s\n' "${NAMES[$i]}" "${RESULTS[$i]}"
   [ "${RESULTS[$i]}" = FAIL ] && failed=1
 done
+if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+  {
+    echo "### PR checks"
+    echo
+    echo "| Check | Result |"
+    echo "|---|---|"
+    for i in "${!NAMES[@]}"; do
+      echo "| ${NAMES[$i]} | $([ "${RESULTS[$i]}" = PASS ] && echo '✅ pass' || echo '❌ FAIL') |"
+    done
+    [ $failed -ne 0 ] && echo && echo "Open the **Run PR checks** step for the failing section. To run the same checks locally: \`npm run check:pr\`."
+  } >> "$GITHUB_STEP_SUMMARY"
+fi
 [ $failed -eq 0 ] && echo "All checks passed." || echo "One or more checks FAILED — see the sections above."
 exit $failed
