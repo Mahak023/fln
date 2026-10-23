@@ -6,6 +6,11 @@
 # so it tests the code that would actually land, not just the author's branch.
 # You can run the same thing locally:  npm run check:pr
 #
+# With no argument it runs every group. Name one or more groups to run only those
+# (the workflow does this, one job per group, so each shows as its own check on the PR):
+#   npm run check:pr -- types eslint
+#   groups: consistency  types  eslint  tests-backend  tests-frontend  build  routes
+#
 # It runs every section even if an earlier one fails, then prints a summary,
 # so one failure doesn't hide another.
 #
@@ -25,6 +30,12 @@
 #   Also: ESLint (bug-class rules, existing errors baselined) and the level-count
 #   check (109 levels agree everywhere; stale 59/93 numbers fail — check-levels.ts)
 set -u
+SELECTED=" $* "
+for g in "$@"; do
+  case "$g" in consistency|types|eslint|tests-backend|tests-frontend|build|routes) ;;
+    *) echo "unknown group: $g (groups: consistency types eslint tests-backend tests-frontend build routes)" >&2; exit 2;; esac
+done
+want() { [ "$SELECTED" = "  " ] || [[ "$SELECTED" == *" $1 "* ]]; }
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
@@ -60,14 +71,20 @@ check_conflict_markers() {
   [ $bad -eq 0 ] && echo "none found"
   return $bad
 }
-run "conflict markers" check_conflict_markers
-run "skill/level snapshot drift" npx tsx scripts/generate-skill-level-map.ts --check
-run "level count consistency" npx tsx scripts/ci/check-levels.ts
+if want consistency; then
+  run "conflict markers" check_conflict_markers
+  run "skill/level snapshot drift" npx tsx scripts/generate-skill-level-map.ts --check
+  run "level count consistency" npx tsx scripts/ci/check-levels.ts
+fi
 
 # ----------------------------------------------------------- 2. type checks
-run "type check: backend"  npm run lint --workspace @fln/backend  --silent
-run "type check: frontend" npm run lint --workspace @fln/frontend --silent
-run "eslint" npx eslint .
+if want types; then
+  run "type check: backend"  npm run lint --workspace @fln/backend  --silent
+  run "type check: frontend" npm run lint --workspace @fln/frontend --silent
+fi
+if want eslint; then
+  run "eslint" npx eslint .
+fi
 
 # ------------------------------------------------------------------ 3. tests
 run_backend_tests() {
@@ -82,16 +99,20 @@ run_backend_tests() {
   npm test --workspace @fln/backend --silent || { echo "FAILED: npm test"; rc=1; }
   return $rc
 }
-run "tests: backend"  run_backend_tests
-run "tests: frontend" npm test --workspace @fln/frontend --silent
+want tests-backend  && run "tests: backend"  run_backend_tests
+want tests-frontend && run "tests: frontend" npm test --workspace @fln/frontend --silent
 
 # ----------------------------------------------------------------- 4. builds
-run "build: frontend" npm run build --workspace @fln/frontend --silent
-run "build: backend"  npm run build --workspace @fln/backend  --silent
+if want build; then
+  run "build: frontend" npm run build --workspace @fln/frontend --silent
+  run "build: backend"  npm run build --workspace @fln/backend  --silent
+fi
 
 # ------------------------------------------------------------ 5. route smoke
-run "route smoke test" bash "$ROOT/scripts/ci/smoke-routes.sh"
-run "all routes: auth + no crash" npx tsx scripts/ci/check-routes.ts
+if want routes; then
+  run "route smoke test" bash "$ROOT/scripts/ci/smoke-routes.sh"
+  run "all routes: auth + no crash" npx tsx scripts/ci/check-routes.ts
+fi
 
 # ------------------------------------------------------------------- summary
 printf '\n\033[1m=== Summary ===\033[0m\n'
@@ -102,7 +123,7 @@ for i in "${!NAMES[@]}"; do
 done
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   {
-    echo "### PR checks"
+    echo "### ${PR_CHECKS_LABEL:-PR checks}"
     echo
     echo "| Check | Result |"
     echo "|---|---|"
@@ -117,7 +138,8 @@ fi
 if [ -n "${PR_CHECKS_REPORT:-}" ]; then
   mkdir -p "$(dirname "$PR_CHECKS_REPORT")"
   {
-    if [ $failed -eq 0 ]; then echo "### ✅ PR checks passed"; else echo "### ❌ PR checks failed"; fi
+    # One report per job; the comment bot stitches them together under its own heading.
+    if [ $failed -eq 0 ]; then echo "#### ✅ ${PR_CHECKS_LABEL:-PR checks}"; else echo "#### ❌ ${PR_CHECKS_LABEL:-PR checks}"; fi
     echo
     echo "| Check | Result |"
     echo "|---|---|"
@@ -136,7 +158,7 @@ if [ -n "${PR_CHECKS_REPORT:-}" ]; then
     done
     if [ $failed -ne 0 ]; then
       echo
-      echo 'To run the same checks on your computer: `npm install`, then `npm run check:pr`. Fix what is listed above and push again; this comment updates itself.'
+      echo "To run this on your computer: \`npm install\`, then \`npm run check:pr${*:+ -- $*}\`. Fix what is listed above and push again; this comment updates itself."
     fi
   } > "$PR_CHECKS_REPORT"
 fi
