@@ -1,6 +1,7 @@
 // Domain types: evaluation, reasoning and grading reports.
 
 import type { ScanQualityResult } from './scanQuality';
+import type { CycleName } from './curriculum.types';
 
 export type ConfidenceLevel = 'Very High' | 'High' | 'Moderate' | 'Low';
 
@@ -91,6 +92,8 @@ export interface EvaluationReport {
   id: string;
   studentId: string;
   worksheetId: string;
+   /** Assessment cycle that produced this report (absent on legacy/diagnostic reports). */
+  cycle?: CycleName;
   score: number;
   totalQuestions: number;
   totalCorrect?: number;
