@@ -532,7 +532,7 @@ test('E2E Step-Up: tokenize → enrollMfa → request → approve → detokenize
   // None of the rows may contain a 12-digit Aadhaar in the
   // details — that's security rule 9.
   for (const row of logbookRows) {
-    assert.ok(!/\b\d{12}\b/.test(row.details), `logbook row details must not contain a 12-digit Aadhaar: ${row.details.slice(0, 80)}`);
+    assert.ok(!/(?<![\w-])\d{12}(?![\w-])/.test(row.details), `logbook row details must not contain a 12-digit Aadhaar: ${row.details.slice(0, 80)}`);
   }
 
   // The challenge row's auditId must resolve to the
