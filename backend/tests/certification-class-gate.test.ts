@@ -350,39 +350,47 @@ test('Student class transition: retaining Class 2 record and getting separate Cl
   assert.equal(allStudentCerts.length, 2, 'Student should have exactly 2 certificates');
 });
 
-// ─── 5. Issue #844 Dependency Blocker Verification ──────────────────────────
+// ─── 5. Issue #844 Seed-data fix verification ───────────────────────────────
+// PR #879 fixed the seed data: Class 2 rows now use level 77 and Class 3 rows
+// use level 91. Balvatika (level 46) and Class 1 (level 60) are still pending
+// the broader Issue #844 curriculum redesign and intentionally remain empty.
 
-test('Issue #844 dependency blocker: seed data currently lacks top-level rows (46, 60, 77, 91)', () => {
-  // In Issue #837, the engine queries getRequirementsForClassLevel(classNumber, level)
-  // using CLASS_TOP_LEVEL (46, 60, 77, 91).
-  // However, competencyRequirements.seed.json still has the legacy level 5 rows
-  // until Issue #844 replaces the seed dataset.
-  const balvatikaReqs = getRequirementsForClassLevel(0, 46);
-  assert.equal(
-    balvatikaReqs.length,
-    0,
-    'Blocker check: Balvatika requirements at level 46 are not in seed data yet (pending #844)'
-  );
-
-  const class1Reqs = getRequirementsForClassLevel(1, 60);
-  assert.equal(
-    class1Reqs.length,
-    0,
-    'Blocker check: Class 1 requirements at level 60 are not in seed data yet (pending #844)'
-  );
-
+test('Seed fix (PR #879): Class 2 requirements now available at level 77', () => {
   const class2Reqs = getRequirementsForClassLevel(2, 77);
-  assert.equal(
-    class2Reqs.length,
-    0,
-    'Blocker check: Class 2 requirements at level 77 are not in seed data yet (pending #844)'
+  assert.ok(
+    class2Reqs.length > 0,
+    `Class 2 requirements at level 77 must be non-empty after PR #879 seed fix (got ${class2Reqs.length})`
   );
+  const topics = class2Reqs.map((r) => r.topic);
+  assert.ok(topics.includes('Number Sense'), 'Must include Number Sense');
+  assert.ok(topics.includes('Number Operations'), 'Must include Number Operations');
+  // Legacy level 5 must no longer match
+  assert.equal(getRequirementsForClassLevel(2, 5).length, 0, 'Legacy level 5 rows must be gone for Class 2');
+});
 
+test('Seed fix (PR #879): Class 3 requirements now available at level 91', () => {
   const class3Reqs = getRequirementsForClassLevel(3, 91);
+  assert.ok(
+    class3Reqs.length > 0,
+    `Class 3 requirements at level 91 must be non-empty after PR #879 seed fix (got ${class3Reqs.length})`
+  );
+  const topics = class3Reqs.map((r) => r.topic);
+  assert.ok(topics.includes('Number Sense'), 'Must include Number Sense');
+  assert.ok(topics.includes('Fractions'), 'Must include Fractions');
+  // Legacy level 5 must no longer match
+  assert.equal(getRequirementsForClassLevel(3, 5).length, 0, 'Legacy level 5 rows must be gone for Class 3');
+});
+
+test('Pending #844: Balvatika (level 46) and Class 1 (level 60) still have no seed rows', () => {
   assert.equal(
-    class3Reqs.length,
+    getRequirementsForClassLevel(0, 46).length,
     0,
-    'Blocker check: Class 3 requirements at level 91 are not in seed data yet (pending #844)'
+    'Blocker still open: Balvatika requirements at level 46 are not yet seeded (pending #844)'
+  );
+  assert.equal(
+    getRequirementsForClassLevel(1, 60).length,
+    0,
+    'Blocker still open: Class 1 requirements at level 60 are not yet seeded (pending #844)'
   );
 });
 
@@ -426,3 +434,115 @@ test('Engine behavior on missing seed requirements: gracefully skips without err
     'No certification created while requirement seed data for (0, 46) is pending #844'
   );
 });
+
+// ─── 6. Real Integration Tests: Engine Creates Certs at Levels 77 and 91 ─────
+// These tests call runCertificationEligibilityForStudent directly with
+// sufficient EvaluationReport evidence so the engine creates and stores a cert.
+// No cert is manually inserted — the engine does all the work.
+
+test('Integration: Class 2 student with Strong mastery receives cert at level 77', async () => {
+  const studentId = 'stu_integ_class2_cert';
+  await dbStore.addStudent({
+    id: studentId,
+    name: 'Class 2 Integration Student',
+    age: 8,
+    classGroup: 'Class 2',
+    section: 'A',
+    schoolId: 'gps-mt-001',
+    currentLevel: 70,
+    currentSubLevel: 0,
+    targetLevel: 71,
+    aadharMasked: 'XXXX-XXXX-7701',
+    levelHistory: [],
+  });
+
+  // Seed evaluation evidence that meets all Class 2 mandatory requirements:
+  // Number Sense: Strong, Number Operations: Strong, Shapes: Satisfactory, Patterns: Satisfactory
+  await dbStore.addEvaluationReport({
+    id: 'rep_integ_class2_cert',
+    studentId,
+    worksheetId: 'ws_integ_class2_cert',
+    timestamp: new Date().toISOString(),
+    score: 10,
+    totalQuestions: 10,
+    conceptMastery: {
+      'Number Sense': 'Strong',
+      'Number Operations': 'Strong',
+      'Shapes': 'Satisfactory',
+      'Patterns': 'Satisfactory',
+    },
+  } as any);
+
+  const student = await dbStore.getStudentById(studentId);
+  assert.ok(student);
+
+  // Run the engine — it should find requirements at (2, 77), decide eligible, and create the cert.
+  await runCertificationEligibilityForStudent(student);
+
+  // The cert must be retrievable at the class top level (77), NOT legacy level 5.
+  const cert = await dbStore.getCertificationByStudentClassLevel(studentId, 2, 77);
+  assert.ok(cert, 'Engine must create and store a Class 2 certification at level 77');
+  assert.equal(cert.classNumber, 2, 'cert.classNumber must be 2');
+  assert.equal(cert.level, 77, 'cert.level must be 77 (Class 2 top level)');
+  assert.equal(cert.status, 'active', 'cert.status must be active');
+  assert.equal(cert.studentId, studentId, 'cert must belong to the correct student');
+
+  // Legacy level 5 must NOT find the cert.
+  const legacyLookup = await dbStore.getCertificationByStudentClassLevel(studentId, 2, 5);
+  assert.equal(legacyLookup, null, 'Legacy level 5 lookup must not find the new level-77 cert');
+});
+
+test('Integration: Class 3 student with sufficient mastery receives cert at level 91', async () => {
+  const studentId = 'stu_integ_class3_cert';
+  await dbStore.addStudent({
+    id: studentId,
+    name: 'Class 3 Integration Student',
+    age: 9,
+    classGroup: 'Class 3',
+    section: 'B',
+    schoolId: 'gps-mt-001',
+    currentLevel: 85,
+    currentSubLevel: 0,
+    targetLevel: 86,
+    aadharMasked: 'XXXX-XXXX-9101',
+    levelHistory: [],
+  });
+
+  // Seed evaluation evidence that meets all Class 3 mandatory requirements:
+  // Number Sense: Strong, Number Operations: Strong, Fractions: Satisfactory,
+  // Measurement: Satisfactory, Money: Strong
+  await dbStore.addEvaluationReport({
+    id: 'rep_integ_class3_cert',
+    studentId,
+    worksheetId: 'ws_integ_class3_cert',
+    timestamp: new Date().toISOString(),
+    score: 10,
+    totalQuestions: 10,
+    conceptMastery: {
+      'Number Sense': 'Strong',
+      'Number Operations': 'Strong',
+      'Fractions': 'Satisfactory',
+      'Measurement': 'Satisfactory',
+      'Money': 'Strong',
+    },
+  } as any);
+
+  const student = await dbStore.getStudentById(studentId);
+  assert.ok(student);
+
+  // Run the engine — it should find requirements at (3, 91), decide eligible, and create the cert.
+  await runCertificationEligibilityForStudent(student);
+
+  // The cert must be retrievable at the class top level (91), NOT legacy level 5.
+  const cert = await dbStore.getCertificationByStudentClassLevel(studentId, 3, 91);
+  assert.ok(cert, 'Engine must create and store a Class 3 certification at level 91');
+  assert.equal(cert.classNumber, 3, 'cert.classNumber must be 3');
+  assert.equal(cert.level, 91, 'cert.level must be 91 (Class 3 top level)');
+  assert.equal(cert.status, 'active', 'cert.status must be active');
+  assert.equal(cert.studentId, studentId, 'cert must belong to the correct student');
+
+  // Legacy level 5 must NOT find the cert.
+  const legacyLookup = await dbStore.getCertificationByStudentClassLevel(studentId, 3, 5);
+  assert.equal(legacyLookup, null, 'Legacy level 5 lookup must not find the new level-91 cert');
+});
+
